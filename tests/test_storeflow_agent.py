@@ -28,7 +28,30 @@ def test_agent_only_selects_read_only_whitelisted_tools(monkeypatch):
 
 def test_storeflow_decision_has_three_named_purchase_options():
     decision = make_decision([{"event_id": "promo", "event_type": "demand_surge", "confidence": 0.8}], seed=7)
-    assert [item["strategy"] for item in decision["strategies"]][:2] == ["正常订货", "适度加订"]
+    assert [item["strategy"] for item in decision["strategies"]] == ["正常订货", "适度加订", "高保障加订"]
+    quantities = [item["replenishment_quantity"] for item in decision["strategies"]]
+    assert quantities == sorted(quantities)
+
+
+def test_infeasible_service_target_reports_simulated_ceiling_and_remedies():
+    decision = make_decision([], seed=7, samples=1000, constraints={
+        "current_inventory": 144,
+        "demand_mean": 180,
+        "demand_stddev": 0,
+        "lead_time_days": 2,
+        "delay_probability": 0.166,
+        "extra_delay_days": 2,
+        "purchase_cost": 10,
+        "budget": 1500,
+        "max_replenishment": 200,
+        "target_service_level": 0.92,
+    })
+    summary = decision["feasibility_summary"]
+    assert decision["recommended_strategy"] is None
+    assert summary["max_achievable_service_level"] < summary["target_service_level"]
+    assert decision["strategies"][-1]["replenishment_quantity"] == 150
+    assert "配送延迟覆盖整个补货周期" in decision["infeasibility_reason"]
+    assert summary["remediation_options"]
 
 
 def test_agent_accepts_a_structured_model_tool_choice(monkeypatch):

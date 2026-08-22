@@ -107,13 +107,13 @@ def test_week7_decision_is_reproducible_and_returns_three_strategies():
     second = make_decision(events, seed=7, samples=1000)
     assert first["strategies"] == second["strategies"]
     strategies = [item["strategy"] for item in first["strategies"]]
-    assert strategies[:2] == ["正常订货", "适度加订"]
+    assert strategies == ["正常订货", "适度加订", "高保障加订"]
+    assert [item["replenishment_quantity"] for item in first["strategies"]] == sorted(item["replenishment_quantity"] for item in first["strategies"])
     if first["infeasibility_reason"] is None:
-        assert strategies == ["正常订货", "适度加订", "高保障加订"]
         assert first["recommended_strategy"] in strategies
     else:
         assert first["recommended_strategy"] is None
-        assert "OR-Tools" in first["infeasibility_reason"]
+        assert first["feasibility_summary"]["blocking_constraints"]
 
 
 def _reviewable_task(client: TestClient) -> str:
