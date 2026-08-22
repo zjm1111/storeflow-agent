@@ -1,0 +1,30 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: supplymind-api:production
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ENVIRONMENT: production
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+  web:
+    restart: unless-stopped
+
+  mysql:
+    ports: []
+    restart: unless-stopped
+
+  redis:
+    ports: []
+    restart: unless-stopped
+
+  qdrant:
+    ports: []
+    restart: unless-stopped

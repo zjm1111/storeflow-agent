@@ -1,0 +1,9 @@
+FROM supplymind-api:week7-base
+
+WORKDIR /app
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir "alembic>=1.14,<2" "celery>=5.4,<6" "langgraph-checkpoint-mysql[pymysql]>=3.0,<4"
+COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./
+COPY sample_data ./sample_data
