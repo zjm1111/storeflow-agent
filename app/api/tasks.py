@@ -45,14 +45,7 @@ def create_task(request: CreateTaskRequest, background_tasks: BackgroundTasks, i
     task = service.start(request.question, workspace_id=principal.workspace_id, scope=request.scope.model_dump(exclude_none=True), constraints=request.constraints, idempotency_key=key)
     # An idempotent retry must not schedule a second execution.
     if task["status"] == "queued":
-        try:
-            from app.worker import celery_app
-            if celery_app is None:
-                raise RuntimeError("Celery is not installed")
-            celery_app.send_task("supplymind.run_task", args=[task["task_id"], task.get("checkpoint", {}).get("version"), principal.workspace_id])
-        except Exception:
-            # Test/no-broker mode is deterministic and deliberately visible in the trace.
-            background_tasks.add_task(service.run, task["task_id"], principal.workspace_id)
+        _schedule_research(task, principal.workspace_id, background_tasks)
     return {"task_id": task["task_id"], "status": task["status"], "trace": task["trace"], "workspace_id": task.get("workspace_id", "demo"), "idempotent": bool(key)}
 
 
@@ -130,6 +123,21 @@ def get_task_memory(task_id: str, principal: Principal = Depends(get_current_pri
     return {"task_id": task_id, "working_memory": task.get("working_memory", {}), "situational_memories": task.get("situational_memories", []), "recalled_memories": task.get("recalled_memories", []), "memory_conflicts": task.get("memory_conflicts", []), "candidate": task.get("memory_candidate")}
 
 
+def _schedule_research(task: dict, workspace_id: str, background_tasks: BackgroundTasks) -> None:
+    """Use Celery for both initial research and review-triggered replanning."""
+    try:
+        from app.worker import celery_app
+        if celery_app is None:
+            raise RuntimeError("Celery is not installed")
+        celery_app.send_task(
+            "supplymind.run_task",
+            args=[task["task_id"], task.get("checkpoint", {}).get("version"), workspace_id],
+        )
+    except Exception:
+        # No-broker test/dev mode remains deterministic and usable.
+        background_tasks.add_task(service.run, task["task_id"], workspace_id)
+
+
 def _review_action(task_id: str, action: str, request: ReviewRequest, principal: Principal, background_tasks: BackgroundTasks | None = None):
     try:
         task = service.review(task_id, action, request.comment, request.constraints, request.evidence_dimensions, workspace_id=principal.workspace_id, reviewer=principal.subject)
@@ -138,7 +146,7 @@ def _review_action(task_id: str, action: str, request: ReviewRequest, principal:
     if task is None:
         raise HTTPException(status_code=409, detail="Review action requires a task awaiting_review")
     if action == "need_more_evidence" and background_tasks is not None:
-        background_tasks.add_task(service.run, task_id, principal.workspace_id)
+        _schedule_research(task, principal.workspace_id, background_tasks)
     return {key: task.get(key) for key in ("task_id", "status", "human_review", "audit_trail", "decision", "final_report", "memory_candidate")}
 
 

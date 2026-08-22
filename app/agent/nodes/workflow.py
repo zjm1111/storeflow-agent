@@ -474,6 +474,7 @@ def complete(state: ResearchState) -> dict:
         state,
         "complete",
         lambda: {"status": "completed", "loop_count": state.get("loop_count", 0) + 1,
+                 "human_review": {"status": "not_requested", "comment": None, "constraints": None},
                  "decision": make_decision(state.get("events", []), constraints=state.get("constraints", {})),
                  "agent_actions": [*state.get("agent_actions", []), {"tool": "build_evidence_pack", "status": "completed", "observation": f"{len(state.get('context_pack', {}).get('items', []))} evidence selected"}, {"tool": "run_replenishment_simulation", "status": "completed", "observation": "three replenishment options compared"}, {"tool": "request_human_review", "status": "pending", "observation": "recommendation is a draft; no purchase order is created"}]},
     )
