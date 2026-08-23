@@ -58,6 +58,7 @@ docker compose ps
 - [产品定位与业务边界](docs/storeflow-positioning.md)
 - [控制台使用手册](docs/user-guide.md)
 - [架构与状态机](docs/architecture.md)
+- [学习地图：RAG、记忆、上下文与 Agent](docs/learning-architecture-guide.md)
 - [故障降级矩阵](docs/fallback-matrix.md)
 - [评测集与回归说明](docs/evaluation-dataset.md)
 - [冻结模拟语料离线评测报告](docs/evaluation-report.md)
