@@ -18,3 +18,10 @@ coverage/
 .idea/
 .vscode/
 .DS_Store
+# Personal interview-preparation materials stay local and are not part of the public portfolio repository.
+docs/ai-app-interview-study-workbook.md
+docs/demo-recording-script.md
+docs/interview-delivery-package.md
+docs/interview-flashcards.md
+docs/job-interview-kit.md
+docs/senior-interviewer-deep-dive.md
