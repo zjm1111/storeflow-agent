@@ -2,27 +2,27 @@
 
 ```mermaid
 flowchart TD
-  A[POST /tasks] --> B[initialize]
-  B --> X[LLM 选择白名单工具]
-  X --> Y[代码执行工具并写入 Observation]
+  A["POST /tasks"] --> B["初始化任务"]
+  B --> X["LLM 选择白名单工具"]
+  X --> Y["代码执行工具并写入 Observation"]
   Y --> X
-  X -->|finish 或预算耗尽| C[plan_research]
-  C --> D[并行 Fan-out：内部资料 / 近期公开风险 / 已批准记忆]
-  D --> E[Fan-in：四路 RRF 融合与精排]
-  E --> F[parse_sources]
-  F --> G[score_evidence]
-  G --> H{coverage 足够?}
-  H -->|否| I[replan]
+  X -->|"结束或预算耗尽"| C["规划补证"]
+  C --> D["并行检索：内部资料 / 近期风险 / 已批准记忆"]
+  D --> E["RRF 融合、重排序与上下文压缩"]
+  E --> F["解析来源"]
+  F --> G["证据评分"]
+  G --> H{"证据覆盖是否足够"}
+  H -->|"否"| I["重新规划"]
   I --> D
-  H -->|是或预算耗尽| J[extract_events]
-  J --> K[generate_report]
-  K --> L[completed]
-  L --> M[POST decision]
-  M --> N[awaiting_review]
-  N -->|approve| O[approved + final_report]
-  N -->|modify constraints| M
-  N -->|need more evidence| C
-  N -->|reject| P[rejected]
+  H -->|"是或预算耗尽"| J["提取风险事件"]
+  J --> K["生成报告"]
+  K --> L["研究完成"]
+  L --> M["POST /decision"]
+  M --> N["等待人工审核"]
+  N -->|"批准"| O["已批准并生成报告"]
+  N -->|"调整约束"| M
+  N -->|"补充证据"| C
+  N -->|"拒绝"| P["已拒绝"]
 ```
 
 MySQL 持久化任务状态、checkpoint、审计记录与决策结果；Redis 缓存 URL 内容；Qdrant 存储内部 PDF 和向量检索载荷。每个节点写入 trace；失败写入 errors 并以受控降级继续，不生成无证据 RiskEvent。
