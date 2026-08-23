@@ -46,6 +46,11 @@ class ResearchService:
                 self.events.publish(task_id, "trace", entry)
             trace_count = len(trace)
         latest = self.repository.get(task_id, workspace_id) or state
+        # The bounded manager explicitly asks for HITL after a decision draft.
+        # Make that transition here, after the research graph checkpoint is
+        # durable, so a worker restart cannot lose the native interrupt state.
+        if latest.get("review_requested") and latest.get("status") == "completed" and latest.get("decision"):
+            latest = self.begin_review(task_id, workspace_id) or latest
         self.events.publish(task_id, "task", {"task_id": task_id, "status": latest.get("status"), "checkpoint": latest.get("checkpoint")})
 
     def resume(self, task_id: str, workspace_id: str = "demo") -> dict | None:
@@ -178,6 +183,12 @@ class ResearchService:
             task["status"] = "queued"
             task["human_review"] = {"status": "replanning", "comment": comment, "constraints": None}
             task["stop_reason"] = None
+            # A review-driven replan is a new bounded manager pass, not a
+            # resume of the already-finished hand-off.
+            task["agent_finished"] = False
+            task["review_requested"] = False
+            task["next_action"] = None
+            task["decision"] = None
             requested = [value for value in (evidence_dimensions or []) if value in {"inventory", "delivery", "demand", "cost"}]
             if requested:
                 task["missing_dimensions"] = requested

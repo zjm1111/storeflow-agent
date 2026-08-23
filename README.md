@@ -6,7 +6,7 @@ StoreFlow 服务于连锁零售企业的区域采购负责人。在促销、天�
 
 ## 为什么不是普通 RAG
 
-StoreFlow 是受限自治 Agent：LangGraph 控制“选择下一步 → 调用白名单只读工具 → 观察结果 → 再规划”的循环。Agent 最多 6 步、最多 2 次外部风险检索；模型只返回结构化工具动作，不保存自由式思维链。关键订货量由固定种子 Monte Carlo 与 OR-Tools 计算，人工审核是必经边界。
+StoreFlow 是受限自治 Agent：LangGraph 控制“选择下一步 → 调用白名单复合工具 → Observation → 再规划”的循环。Manager 只可选择取证、评估证据缺口、决策分析、提交审核或结束；一次取证工具内部并行完成内部资料、公开风险和已批准记忆的采集，再统一 RRF、重排与压缩。Agent 最多 6 步、最多 2 次检索；模型只返回结构化工具动作，不保存自由式思维链。关键订货量由固定种子 Monte Carlo 与 OR-Tools 计算，决策草案会自动进入人工审核。
 
 ```mermaid
 flowchart LR
@@ -25,10 +25,10 @@ flowchart LR
 - 内部 PDF、BM25/向量、已批准记忆、Tavily/公开风险的多路检索；只读证据通道并行 Fan-out，随后 RRF、重排序与上下文 Fan-in。
 - Evidence ID 约束的风险事件；冲突来源保持待裁决，不自动变成事实。
 - 工作记忆、情景任务快照与仅审核后可复用的长期业务记忆。
-- 三种统一目标下的订货策略：正常订货、适度加订、高保障加订；展示成本、服务水平、缺货概率、CVaR 与约束可行性。
+- 三种明确风险偏好的订货策略：成本优先、平衡型、服务优先；展示成本、服务水平、缺货概率、CVaR 与约束可行性。
 - LangGraph interrupt + MySQL checkpoint 的持久化 HITL；Celery + Redis Streams 的异步任务和可续传 SSE。
 - JWT/RBAC、SSRF 防护、JSON 日志、Prometheus 指标、Docker Compose。
-- 静态评测集：48 个 StoreFlow 问题、96 条可审阅 Evidence 标注，详见 [评测集说明](docs/evaluation-dataset.md)。
+- 冻结模拟评测：48 个问题、96 条金标 Evidence、48 条干扰资料；以本地 BM25、哈希向量和 RRF+本地 rerank 的离线指标对比，详见 [评测集说明](docs/evaluation-dataset.md)。
 
 ## 快速启动
 
@@ -58,7 +58,9 @@ docker compose ps
 - [产品定位与业务边界](docs/storeflow-positioning.md)
 - [控制台使用手册](docs/user-guide.md)
 - [架构与状态机](docs/architecture.md)
+- [故障降级矩阵](docs/fallback-matrix.md)
 - [评测集与回归说明](docs/evaluation-dataset.md)
+- [冻结模拟语料离线评测报告](docs/evaluation-report.md)
 - [本机验收报告](docs/acceptance-report.md)
 - [Demo 手册](docs/demo-runbook.md)
 - [项目手册](docs/project-handbook.md)

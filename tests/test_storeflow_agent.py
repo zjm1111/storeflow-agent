@@ -19,11 +19,11 @@ def test_agent_only_selects_read_only_whitelisted_tools(monkeypatch):
     monkeypatch.setattr("app.agent.nodes.workflow.HybridRetriever", Retriever)
     state = initial_state("storeflow-agent", "暴雨期间门店饮料促销如何订货？")
     decision = agent_decide_next_action(state)
-    assert decision["next_action"]["tool"] == "retrieve_approved_memory"
+    assert decision["next_action"]["tool"] == "retrieve_evidence"
     state.update(decision)
     executed = agent_execute_tool(state)
-    assert executed["agent_actions"][0]["tool"] == "retrieve_approved_memory"
-    assert executed["external_searches"] == 0
+    assert executed["agent_actions"][0]["tool"] == "retrieve_evidence"
+    assert executed["search_count"] == 1
 
 
 def test_storeflow_decision_has_three_named_purchase_options():
@@ -58,13 +58,13 @@ def test_agent_accepts_a_structured_model_tool_choice(monkeypatch):
     class Client:
         class settings: model_enabled = True
         def status(self): return {"provider": "test", "enabled": True}
-        def complete_json(self, **_kwargs): return {"tool": "search_recent_risk", "reason": "配送维度缺少近期天气和交通证据。"}, {"total_tokens": 12}
+        def complete_json(self, **_kwargs): return {"tool": "retrieve_evidence", "reason": "配送维度缺少近期天气和交通证据。"}, {"total_tokens": 12}
     monkeypatch.setattr("app.agent.nodes.workflow.BailianClient", Client)
     state = initial_state("structured-agent", "门店暴雨促销补货")
-    state["agent_actions"] = [{"tool": "retrieve_approved_memory", "status": "completed"}, {"tool": "search_internal_knowledge", "status": "completed"}]
+    state["agent_actions"] = [{"tool": "retrieve_evidence", "status": "completed"}]
     state["sources"] = [{"source_id": "s", "title": "库存日报", "url": "https://example.com/s", "content": "门店库存和促销销量", "retrieved_at": "2026-08-22T00:00:00Z"}]
     result = agent_decide_next_action(state)
-    assert result["next_action"]["tool"] == "search_recent_risk"
+    assert result["next_action"]["tool"] == "retrieve_evidence"
     assert result["token_usage"] == 12
 
 

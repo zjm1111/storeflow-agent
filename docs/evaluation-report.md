@@ -1,11 +1,13 @@
-# StoreFlow 离线评测基线
+# 冻结模拟语料离线评测报告
 
-当前回归数据集含 48 个静态 StoreFlow 问题：配送到货、门店库存、促销需求、成本风险各 12 个；每题两条金标准证据，共 96 条。详见 [评测集说明](evaluation-dataset.md)。
+运行版本：StoreFlow v1 frozen simulated corpus。运行方式：`GET /api/tasks/evaluations/run`。该报告只描述仓库内 48 个模拟问题、96 条金标 Evidence 与 48 条无关干扰资料上的确定性离线结果，不代表真实企业数据、线上流量或模型效果。
 
-运行：
+| 检索策略 | Recall@8 | MRR | NDCG@8 | Precision@8 |
+| --- | ---: | ---: | ---: | ---: |
+| BM25 | 0.7917 | 0.8976 | 0.7564 | 0.1979 |
+| 哈希向量 | 0.5208 | 0.5535 | 0.4442 | 0.1302 |
+| RRF + 本地 rerank | 0.7708 | 0.9010 | 0.7370 | 0.1927 |
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_evaluation.py -q
-```
+RRF + 本地 rerank 在该语料上略提升首个相关结果的 MRR，但 Recall@8 略低于 BM25。项目保留该结果而不选择性宣传“全面提升”：它说明当前小型模拟语料下的融合排序仍需继续调参和扩充。生产/真实资料评测必须固定语料快照、模型版本和人工相关性标注后另行执行。
 
-结果用于校验数据完整性、风险事件类型、引用结构和决策复现性。它不是企业真实数据上的 Recall、NDCG 或线上效果声明。
+四维明细与可复跑 JSON 由评测接口返回；实现见 `app/services/evaluation.py`。

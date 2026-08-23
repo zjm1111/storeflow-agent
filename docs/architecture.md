@@ -1,30 +1,47 @@
 # StoreFlow 架构与状态机
 
+StoreFlow 是单 Manager、受限 ReAct Agent。LLM 不直接检索、计算订货量或修改业务系统；它只从高层动作中选择下一步，动作由确定性复合工具执行并返回受控 Observation。
+
 ```mermaid
 flowchart TD
-  A["POST /tasks"] --> B["初始化任务"]
-  B --> X["LLM 选择白名单工具"]
-  X --> Y["代码执行工具并写入 Observation"]
-  Y --> X
-  X -->|"结束或预算耗尽"| C["规划补证"]
-  C --> D["并行检索：内部资料 / 近期风险 / 已批准记忆"]
-  D --> E["RRF 融合、重排序与上下文压缩"]
-  E --> F["解析来源"]
-  F --> G["证据评分"]
-  G --> H{"证据覆盖是否足够"}
-  H -->|"否"| I["重新规划"]
-  I --> D
-  H -->|"是或预算耗尽"| J["提取风险事件"]
-  J --> K["生成报告"]
-  K --> L["研究完成"]
-  L --> M["POST /decision"]
-  M --> N["等待人工审核"]
-  N -->|"批准"| O["已批准并生成报告"]
-  N -->|"调整约束"| M
-  N -->|"补充证据"| C
-  N -->|"拒绝"| P["已拒绝"]
+  A[采购问题和业务约束] --> B[ReAct Manager]
+  B --> C{高层动作}
+  C -->|retrieve evidence| D[复合检索工具]
+  D --> D1[内部 PDF: BM25 和向量]
+  D --> D2[近期公开风险: Tavily]
+  D --> D3[已批准长期记忆]
+  D1 --> E[RRF: rerank: 去重: 上下文压缩]
+  D2 --> E
+  D3 --> E
+  E --> F[Evidence ID 与 Observation]
+  F --> B
+  C -->|assess evidence gap| G[四维覆盖和冲突判断]
+  G --> B
+  C -->|run decision analysis| H[RiskEvent]
+  H --> I[固定种子 Monte Carlo]
+  I --> J[OR-Tools 三种风险偏好]
+  J --> K[三策略 KPI 和建议草案]
+  K --> B
+  C -->|request human review or finish| L[LangGraph interrupt]
+  L --> M[MySQL checkpoint: awaiting review]
+  M -->|批准| N[审批式长期记忆]
+  M -->|改约束或补证| B
+  M -->|拒绝| O[审计结束]
 ```
 
-MySQL 持久化任务状态、checkpoint、审计记录与决策结果；Redis 缓存 URL 内容；Qdrant 存储内部 PDF 和向量检索载荷。每个节点写入 trace；失败写入 errors 并以受控降级继续，不生成无证据 RiskEvent。
+## 高层白名单与停止规则
 
-其中只有互不依赖、只读的三条证据通道会并行：内部资料、近期公开风险和已批准长期记忆。它们完成后再统一执行 RRF 融合、重排序和上下文压缩；仿真、策略选择和人工审核保持顺序执行，确保约束与审计链可复现。
+Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision_analysis`、`request_human_review`、`finish`。`retrieve_evidence` 是唯一的证据采集入口：一次动作内部并行执行三路只读检索，再统一进行 RRF、重排、去重、元数据过滤、上下文压缩和 Evidence ID 绑定。因此不会出现“Agent 逐项查一次，固定流程再 Fan-out 一次”的重复链路。
+
+当库存、需求、到货、成本四维均有证据且没有未裁决关键冲突时，进入决策；否则在最多 6 步、最多 2 次检索、上下文 token 与延迟预算内补证。预算耗尽仍会生成带降级原因的建议草案，并自动交给人工审核，不会自动下单。
+
+## 状态与持久化归属
+
+| 状态域 | 包含内容 | 持久化与职责 |
+| --- | --- | --- |
+| Task 生命周期 | `queued/running/completed/awaiting_review/approved/rejected`、幂等键、审计 | MySQL 任务快照；Redis Streams 发布状态事件 |
+| Agent 工作状态 | 已选动作、Observation 摘要、预算、覆盖缺口、Evidence ID | LangGraph State + MySQL checkpoint；不记录自由式思维链 |
+| Business Inputs | 区域、门店、SKU、库存、需求、提前期、成本与预算 | MySQL 任务快照；仅用于单门店单 SKU 单周期模拟 |
+| Decision/Review | RiskEvent、三策略 KPI、约束 diff、审核意见、记忆候选 | MySQL；审核通过后才由 Qdrant/记忆索引提供跨任务召回 |
+
+内部资料向量与元数据由 Qdrant 承载；Redis 仅用于 URL 缓存和任务事件，不能作为长期业务事实来源。详细故障行为见 [Fallback Matrix](fallback-matrix.md)。

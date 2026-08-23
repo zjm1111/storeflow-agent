@@ -46,6 +46,7 @@ class ResearchState(TypedDict, total=False):
     agent_finished: bool
     model_decision_count: int
     max_model_decisions: int
+    review_requested: bool
 
 
 def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope: dict | None = None, constraints: dict | None = None, idempotency_key: str | None = None) -> ResearchState:
@@ -66,6 +67,7 @@ def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope
         "agent_finished": False,
         "model_decision_count": 0,
         "max_model_decisions": 2,
+        "review_requested": False,
         "question": question,
         "plan": None,
         "sources": [],

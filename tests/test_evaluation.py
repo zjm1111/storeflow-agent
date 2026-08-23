@@ -1,7 +1,7 @@
 from app.agent.nodes.workflow import plan_research, retrieve_sources
 from app.agent.state import initial_state
 from app.services.decision import make_decision
-from app.services.evaluation import CASES_PATH, load_cases, run_evaluation
+from app.services.evaluation import CASES_PATH, build_frozen_corpus, load_cases, run_evaluation
 
 
 def test_week9_evaluation_baseline_covers_four_dimensions_and_metrics():
@@ -14,8 +14,10 @@ def test_week9_evaluation_baseline_covers_four_dimensions_and_metrics():
     assert report["dataset"]["case_count"] == 48
     assert report["dataset"]["evidence_annotation_count"] >= 96
     assert set(report["dataset"]["dimensions"]) == {"inventory", "delivery", "demand", "cost"}
-    assert report["risk_event"]["f1"] == 1.0
-    assert report["citation_accuracy"] == 1.0
+    assert len(build_frozen_corpus(cases)) == 144
+    assert set(report["retrieval"]["strategies"]) == {"bm25", "hash_vector", "rrf_local_rerank"}
+    assert report["retrieval"]["corpus"]["distractors"] == 48
+    assert report["risk_event_static_fixture"]["f1"] == 1.0
     assert report["decision"]["reproducible"]
     assert report["decision"]["infeasible_constraints_reported"]
 

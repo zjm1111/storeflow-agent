@@ -18,8 +18,7 @@ class ResearchPlan(BaseModel):
 class AgentAction(BaseModel):
     """A bounded tool decision, deliberately excluding chain-of-thought."""
     tool: Literal[
-        "search_internal_knowledge", "search_recent_risk", "retrieve_approved_memory",
-        "assess_evidence_gap", "build_evidence_pack", "run_replenishment_simulation",
+        "retrieve_evidence", "assess_evidence_gap", "run_decision_analysis",
         "request_human_review", "finish",
     ]
     reason: str = Field(min_length=3, max_length=240)
@@ -57,6 +56,8 @@ class Source(BaseModel):
 class EvidenceSnippet(BaseModel):
     evidence_id: str = Field(min_length=1)
     source_id: str = Field(min_length=1)
+    source_type: Literal["fixture", "web", "pdf", "internal"] = "fixture"
+    source_uri: str | None = None
     quote: str = Field(min_length=1)
     relevance_score: float = Field(ge=0, le=1)
     authority_score: float = Field(ge=0, le=1)
@@ -68,6 +69,8 @@ class EvidenceSnippet(BaseModel):
     char_start: int | None = Field(default=None, ge=0)
     char_end: int | None = Field(default=None, ge=0)
     freshness_note: str | None = None
+    consistency_score: float = Field(default=1.0, ge=0, le=1)
+    conflict_group: str | None = None
     conflict_status: Literal["none", "pending_review"] = "none"
 
 

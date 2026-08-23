@@ -83,11 +83,13 @@ def resume_task(task_id: str, background_tasks: BackgroundTasks, principal: Prin
     return {"task_id": task_id, "status": "queued", "checkpoint": task.get("checkpoint")}
 
 
-@router.post("/{task_id}/decision")
+@router.post("/{task_id}/decision", deprecated=True)
 def create_decision(task_id: str, principal: Principal = Depends(require_roles("operator", "reviewer", "admin"))):
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("status") == "awaiting_review" and task.get("decision"):
+        return {**task["decision"], "status": task["status"], "human_review": task.get("human_review"), "deprecated": True}
     if task.get("status") != "completed":
         raise HTTPException(status_code=409, detail="Decision can only be created for a completed research task")
     decision = make_decision(task.get("events", []), constraints=task.get("constraints", {}))
@@ -96,7 +98,7 @@ def create_decision(task_id: str, principal: Principal = Depends(require_roles("
     reviewed = service.begin_review(task_id, principal.workspace_id)
     if reviewed is None:
         raise HTTPException(status_code=409, detail="Task could not enter human review")
-    return {**decision, "status": reviewed["status"], "human_review": reviewed["human_review"]}
+    return {**decision, "status": reviewed["status"], "human_review": reviewed["human_review"], "deprecated": True}
 
 
 @router.get("/{task_id}/review")

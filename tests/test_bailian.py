@@ -44,7 +44,7 @@ def test_bailian_posts_openai_compatible_chat_completion(monkeypatch):
     monkeypatch.setattr("app.services.llm.urlopen", fake_open)
     body, metadata = BailianClient().complete_json(system="system", user="question")
     assert captured["url"] == "https://example.test/compatible-mode/v1/chat/completions"
-    assert captured["payload"]["model"] == "qwen-plus"
+    assert captured["payload"]["model"] == "qwen3.7-plus"
     assert body["sub_questions"] == ["What causes last-mile delays?"]
     assert metadata["total_tokens"] == 19
 
@@ -53,6 +53,7 @@ def test_model_plan_is_validated_and_failure_keeps_deterministic_plan(monkeypatc
     class FakeClient:
         class Settings:
             model_enabled = True
+            model_enrichment_enabled = True
         settings = Settings()
         def complete_json(self, **_):
             raise ModelCallError("HTTP 503")

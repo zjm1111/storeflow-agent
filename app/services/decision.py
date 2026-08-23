@@ -24,6 +24,22 @@ class RiskParameters:
     source_event_ids: list[str] | None = None
 
 
+@dataclass(frozen=True)
+class RiskProfile:
+    key: str
+    strategy: str
+    target_offset: float
+    cvar_weight: float
+    stockout_penalty: float
+
+
+RISK_PROFILES = (
+    RiskProfile("cost_first", "正常订货", -0.05, 0.05, 1_000.0),
+    RiskProfile("balanced", "适度加订", 0.0, 0.25, 3_000.0),
+    RiskProfile("service_first", "高保障加订", 0.03, 0.50, 6_000.0),
+)
+
+
 def parameters_from_events(events: list[dict], constraints: dict | None = None) -> RiskParameters:
     params = RiskParameters(source_event_ids=[event["event_id"] for event in events])
     for event in events:
@@ -48,7 +64,7 @@ def parameters_from_events(events: list[dict], constraints: dict | None = None) 
     return params
 
 
-def _evaluate(name: str, quantity: int, params: RiskParameters, seed: int, samples: int) -> dict:
+def _evaluate(name: str, quantity: int, params: RiskParameters, seed: int, samples: int, service_target: float | None = None) -> dict:
     rng = random.Random(seed)
     stockouts = delays = 0; total_cost = 0.0; scenario_costs: list[float] = []
     delayed_arrival_fraction = max(0.0, min(1.0, 1 - params.extra_delay_days / max(params.lead_time_days, 1)))
@@ -68,11 +84,12 @@ def _evaluate(name: str, quantity: int, params: RiskParameters, seed: int, sampl
     stockout_probability = stockouts / samples
     tail = sorted(scenario_costs)[max(0, int(samples * 0.95)):]
     cvar = sum(tail) / max(1, len(tail))
-    feasible = quantity * params.purchase_cost <= params.budget and quantity <= params.max_replenishment and (1 - stockout_probability) >= params.target_service_level
+    target = params.target_service_level if service_target is None else service_target
+    feasible = quantity * params.purchase_cost <= params.budget and quantity <= params.max_replenishment and (1 - stockout_probability) >= target
     return {"strategy": name, "replenishment_quantity": quantity, "stockout_probability": round(stockout_probability, 4), "delay_probability": round(delays / samples, 4), "delayed_arrival_fraction": round(delayed_arrival_fraction, 4), "service_level": round(1 - stockout_probability, 4), "expected_total_cost": round(total_cost / samples, 2), "cvar_95_cost": round(cvar, 2), "constraint_feasible": feasible}
 
 
-def _optimize(params: RiskParameters) -> tuple[int | None, str | None]:
+def _optimize(params: RiskParameters, service_target: float, risk_weight: float) -> tuple[int | None, str | None]:
     try:
         from ortools.linear_solver import pywraplp
     except ImportError:
@@ -88,8 +105,8 @@ def _optimize(params: RiskParameters) -> tuple[int | None, str | None]:
     expected_demand = params.demand_mean * (1 + params.delay_probability * params.extra_delay_days / max(params.lead_time_days, 1))
     shortfall = solver.NumVar(0, solver.infinity(), "expected_shortfall")
     solver.Add(shortfall >= expected_demand - params.current_inventory - quantity)
-    solver.Add(params.current_inventory + quantity >= expected_demand * params.target_service_level)
-    solver.Minimize(quantity * (params.purchase_cost + params.holding_cost) + shortfall * params.stockout_cost)
+    solver.Add(params.current_inventory + quantity >= expected_demand * service_target)
+    solver.Minimize(quantity * (params.purchase_cost + params.holding_cost) + shortfall * (params.stockout_cost + risk_weight))
     if solver.Solve() != pywraplp.Solver.OPTIMAL:
         return None, "constraints are infeasible for the configured budget and service level"
     return int(round(quantity.solution_value())), None
@@ -106,7 +123,7 @@ def _maximum_order_quantity(params: RiskParameters) -> tuple[int, bool, bool]:
     return max(0, upper), budget_ceiling < params.max_replenishment, params.max_replenishment <= budget_ceiling
 
 
-def _minimum_simulated_service_quantity(params: RiskParameters, seed: int, samples: int, lower: int, upper: int) -> int | None:
+def _minimum_simulated_service_quantity(params: RiskParameters, seed: int, samples: int, lower: int, upper: int, service_target: float) -> int | None:
     """Find the smallest integer quantity meeting hard constraints in simulation.
 
     Every simulation restarts with the same seed, so candidate quantities see the
@@ -116,12 +133,12 @@ def _minimum_simulated_service_quantity(params: RiskParameters, seed: int, sampl
     """
     if lower > upper:
         return None
-    if not _evaluate("candidate", upper, params, seed, samples)["constraint_feasible"]:
+    if not _evaluate("candidate", upper, params, seed, samples, service_target)["constraint_feasible"]:
         return None
     left, right = lower, upper
     while left < right:
         middle = (left + right) // 2
-        if _evaluate("candidate", middle, params, seed, samples)["constraint_feasible"]:
+        if _evaluate("candidate", middle, params, seed, samples, service_target)["constraint_feasible"]:
             right = middle
         else:
             left = middle + 1
@@ -163,29 +180,26 @@ def _infeasibility_summary(params: RiskParameters, ceiling: int, ceiling_result:
 def make_decision(events: list[dict], seed: int = 20260820, samples: int = 1000, constraints: dict | None = None) -> dict:
     params = parameters_from_events(events, constraints)
     ceiling, budget_binds, quantity_binds = _maximum_order_quantity(params)
-    solver_quantity, _ = _optimize(params)
-    normal_quantity = min(100, ceiling)
-    expected_gap = max(0, int(round(params.demand_mean * params.lead_time_days - params.current_inventory)))
-    moderate_quantity = min(ceiling, max(normal_quantity, expected_gap))
-    simulated_target_quantity = _minimum_simulated_service_quantity(params, seed, samples, moderate_quantity, ceiling)
-    buffer_step = max(1, int(round(max(10, moderate_quantity) * 0.1)))
-    if simulated_target_quantity is not None:
-        high_quantity = min(ceiling, max(moderate_quantity + buffer_step, simulated_target_quantity, solver_quantity or 0))
-    else:
-        # An infeasible target must still show the best permitted contingency
-        # order, rather than misleadingly labelling a smaller solver quantity
-        # as "high assurance".
-        high_quantity = ceiling
-    strategies = [
-        _evaluate("正常订货", normal_quantity, params, seed, samples),
-        _evaluate("适度加订", moderate_quantity, params, seed, samples),
-        _evaluate("高保障加订", high_quantity, params, seed, samples),
-    ]
+    strategies = []
+    for profile in RISK_PROFILES:
+        service_target = min(0.99, max(0.0, params.target_service_level + profile.target_offset))
+        solver_quantity, _ = _optimize(params, service_target, profile.stockout_penalty)
+        lower = max(0, solver_quantity or 0)
+        simulated_quantity = _minimum_simulated_service_quantity(params, seed, samples, lower, ceiling, service_target)
+        # If the exact simulated target is impossible, show the best permitted
+        # contingency quantity with an explicit infeasibility flag.
+        quantity = simulated_quantity if simulated_quantity is not None else ceiling
+        result = _evaluate(profile.strategy, quantity, params, seed, samples, service_target)
+        result.update({
+            "risk_profile": profile.key,
+            "service_target": round(service_target, 4),
+            "objective_score": round(result["expected_total_cost"] + profile.cvar_weight * result["cvar_95_cost"] + profile.stockout_penalty * result["stockout_probability"], 2),
+        })
+        strategies.append(result)
     feasible = [item for item in strategies if item["constraint_feasible"]]
-    # An explicit objective makes the choice explainable instead of privileging a label.
-    for item in strategies:
-        item["objective_score"] = round(item["expected_total_cost"] + 0.25 * item["cvar_95_cost"] + 3000 * item["stockout_probability"], 2)
-    recommended = min(feasible, key=lambda item: item["objective_score"])["strategy"] if feasible else None
+    balanced = next((item for item in strategies if item["risk_profile"] == "balanced" and item["constraint_feasible"]), None)
+    recommended = (balanced or min(feasible, key=lambda item: item["objective_score"], default=None))
+    recommended = recommended["strategy"] if recommended else None
     ceiling_result = _evaluate("maximum permitted", ceiling, params, seed, samples)
     reason = None
     blockers: list[str] = []
@@ -199,7 +213,7 @@ def make_decision(events: list[dict], seed: int = 20260820, samples: int = 1000,
         "applied_constraints": constraints or {},
         "strategies": strategies,
         "recommended_strategy": recommended,
-        "recommendation_reason": "lowest expected cost + CVaR tail-risk + stockout penalty among feasible strategies" if recommended else "no strategy satisfies the configured hard constraints",
+        "recommendation_reason": "balanced profile satisfies the requested service target" if balanced else "lowest risk-adjusted objective among feasible strategies" if recommended else "no strategy satisfies the configured hard constraints",
         "infeasibility_reason": reason,
         "feasibility_summary": {
             "target_service_level": params.target_service_level,
