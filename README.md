@@ -62,10 +62,6 @@ docker compose ps
 - [本机验收报告](docs/acceptance-report.md)
 - [Demo 手册](docs/demo-runbook.md)
 - [项目手册](docs/project-handbook.md)
-- [求职与面试材料](docs/job-interview-kit.md)
-- [Demo 录屏脚本](docs/demo-recording-script.md)
-- [14 天 AI 应用工程师学习工作簿](docs/ai-app-interview-study-workbook.md)
-- [面试问答卡（15 题）](docs/interview-flashcards.md)
 
 ## 开源与安全
 
