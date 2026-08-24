@@ -141,6 +141,12 @@ def test_retrieval_fans_out_independent_lanes_then_records_fan_in(monkeypatch):
 
     monkeypatch.setattr("app.agent.nodes.workflow.HybridRetriever", Retriever)
     monkeypatch.setattr("app.agent.nodes.workflow.MemoryService", Memory)
+    # This unit test verifies the public lane's fan-in behavior without
+    # requiring a real Tavily key or network request.
+    monkeypatch.setattr(
+        "app.agent.nodes.workflow.get_settings",
+        lambda: type("Settings", (), {"tavily_api_key": "test-key", "tavily_cost_per_request_usd": 0.0})(),
+    )
     result = retrieve_sources(initial_state("parallel", "暴雨促销期间门店订货", scope={"store": "浦东门店"}))
     parallel = result["working_memory"]["parallel_retrieval"]
     assert parallel["mode"] == "fan_out_fan_in"

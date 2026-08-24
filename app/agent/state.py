@@ -3,6 +3,7 @@ from typing import TypedDict
 
 class ResearchState(TypedDict, total=False):
     task_id: str
+    state_version: int
     question: str
     plan: dict | None
     sources: list[dict]
@@ -53,6 +54,7 @@ class ResearchState(TypedDict, total=False):
 def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope: dict | None = None, constraints: dict | None = None, idempotency_key: str | None = None) -> ResearchState:
     return {
         "task_id": task_id,
+        "state_version": 0,
         "workspace_id": workspace_id,
         "scope": scope or {},
         "constraints": constraints or {},

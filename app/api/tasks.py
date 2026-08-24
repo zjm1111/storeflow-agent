@@ -11,6 +11,7 @@ from app.services.retrieval import HybridRetriever
 from app.services.decision import make_decision
 from app.services.evaluation import run_evaluation
 from app.services.memory import MemoryService
+from app.repositories import StateConflictError
 from app.agent.schemas import FulfillmentScope
 from app.core.auth import Principal, get_current_principal, require_roles
 
@@ -94,7 +95,10 @@ def create_decision(task_id: str, principal: Principal = Depends(require_roles("
         raise HTTPException(status_code=409, detail="Decision can only be created for a completed research task")
     decision = make_decision(task.get("events", []), constraints=task.get("constraints", {}))
     task["decision"] = decision
-    service.repository.save(task_id, task)
+    try:
+        service.repository.save(task_id, task)
+    except StateConflictError as exc:
+        raise HTTPException(status_code=409, detail="Task state changed; refresh and retry the deprecated decision endpoint") from exc
     reviewed = service.begin_review(task_id, principal.workspace_id)
     if reviewed is None:
         raise HTTPException(status_code=409, detail="Task could not enter human review")
@@ -133,7 +137,7 @@ def _schedule_research(task: dict, workspace_id: str, background_tasks: Backgrou
             raise RuntimeError("Celery is not installed")
         celery_app.send_task(
             "supplymind.run_task",
-            args=[task["task_id"], task.get("checkpoint", {}).get("version"), workspace_id],
+            args=[task["task_id"], task.get("checkpoint", {}).get("version"), workspace_id, task.get("state_version")],
         )
     except Exception:
         # No-broker test/dev mode remains deterministic and usable.
@@ -143,6 +147,8 @@ def _schedule_research(task: dict, workspace_id: str, background_tasks: Backgrou
 def _review_action(task_id: str, action: str, request: ReviewRequest, principal: Principal, background_tasks: BackgroundTasks | None = None):
     try:
         task = service.review(task_id, action, request.comment, request.constraints, request.evidence_dimensions, workspace_id=principal.workspace_id, reviewer=principal.subject)
+    except StateConflictError as exc:
+        raise HTTPException(status_code=409, detail="Task state changed; refresh and retry the review action") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if task is None:
@@ -193,7 +199,7 @@ def get_task(task_id: str, principal: Principal = Depends(get_current_principal)
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {"task_id": task["task_id"], "status": task["status"], "trace": task["trace"], "errors": task["errors"], "checkpoint": task.get("checkpoint"), "active_action": task.get("active_action"), "coverage": task.get("coverage"), "stop_reason": task.get("stop_reason")}
+    return {"task_id": task["task_id"], "status": task["status"], "state_version": task.get("state_version"), "trace": task["trace"], "errors": task["errors"], "checkpoint": task.get("checkpoint"), "active_action": task.get("active_action"), "coverage": task.get("coverage"), "stop_reason": task.get("stop_reason")}
 
 
 @router.get("/{task_id}/result")
@@ -201,7 +207,7 @@ def get_result(task_id: str, principal: Principal = Depends(get_current_principa
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {key: task.get(key) for key in ("task_id", "workspace_id", "scope", "status", "plan", "sources", "evidence", "events", "report", "hybrid_results", "context_pack", "working_memory", "situational_memories", "recalled_memories", "memory_conflicts", "memory_candidate", "agent_actions", "active_action", "errors", "trace", "coverage", "missing_dimensions", "search_count", "max_search", "max_loop", "max_latency_seconds", "stop_reason", "checkpoint", "decision", "human_review", "audit_trail", "final_report", "model_execution", "dependency_execution", "token_usage", "estimated_cost_usd")}
+    return {key: task.get(key) for key in ("task_id", "workspace_id", "scope", "status", "state_version", "plan", "sources", "evidence", "events", "report", "hybrid_results", "context_pack", "working_memory", "situational_memories", "recalled_memories", "memory_conflicts", "memory_candidate", "agent_actions", "active_action", "errors", "trace", "coverage", "missing_dimensions", "search_count", "max_search", "max_loop", "max_latency_seconds", "stop_reason", "checkpoint", "decision", "human_review", "audit_trail", "final_report", "model_execution", "dependency_execution", "token_usage", "estimated_cost_usd")}
 
 
 @router.get("/{task_id}/events")

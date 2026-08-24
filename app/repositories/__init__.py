@@ -1,3 +1,3 @@
-from .tasks import TaskRepository
+from .tasks import StateConflictError, TaskRepository
 
-__all__ = ["TaskRepository"]
+__all__ = ["TaskRepository", "StateConflictError"]

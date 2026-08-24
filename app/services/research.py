@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from app.agent.graph import build_research_graph
 from app.agent.state import initial_state
-from app.repositories import TaskRepository
+from app.repositories import StateConflictError, TaskRepository
 from app.services.events import TaskEventBroker
 from app.services.llm import BailianClient, ModelCallError
 from app.services.memory import MemoryService
@@ -30,28 +30,41 @@ class ResearchService:
         state["status"] = "queued"
         self.repository.save(task_id, state)
         self.checkpoints.save(state)
-        self.events.publish(task_id, "task", {"task_id": task_id, "status": "queued"})
+        self.events.publish(task_id, "task", {"task_id": task_id, "status": "queued", "state_version": state.get("state_version")})
         return state
 
     def run(self, task_id: str, workspace_id: str = "demo") -> None:
         state = self.repository.get(task_id, workspace_id)
         if state is None:
             return
+        expected_state_version = int(state.get("state_version", 0))
         trace_count = 0
-        for current in self.graph.stream(state, stream_mode="values"):
-            self.repository.save(task_id, current)
-            self.checkpoints.save(current)
-            trace = current.get("trace", [])
-            for entry in trace[trace_count:]:
-                self.events.publish(task_id, "trace", entry)
-            trace_count = len(trace)
+        try:
+            for current in self.graph.stream(state, stream_mode="values"):
+                # LangGraph emits immutable-ish snapshots. Keep the database
+                # CAS version in this runner between node persistence points.
+                current["state_version"] = expected_state_version
+                self.repository.save(task_id, current)
+                expected_state_version = current["state_version"]
+                self.checkpoints.save(current)
+                trace = current.get("trace", [])
+                for entry in trace[trace_count:]:
+                    self.events.publish(task_id, "trace", entry)
+                trace_count = len(trace)
+        except StateConflictError:
+            # A reviewer or newer worker owns the snapshot. Do not let a stale
+            # in-memory graph state overwrite it.
+            latest = self.repository.get(task_id, workspace_id)
+            if latest:
+                self.events.publish(task_id, "task", {"task_id": task_id, "status": latest.get("status"), "state_version": latest.get("state_version"), "degradation": "stale worker snapshot blocked by optimistic lock"})
+            return
         latest = self.repository.get(task_id, workspace_id) or state
         # The bounded manager explicitly asks for HITL after a decision draft.
         # Make that transition here, after the research graph checkpoint is
         # durable, so a worker restart cannot lose the native interrupt state.
         if latest.get("review_requested") and latest.get("status") == "completed" and latest.get("decision"):
             latest = self.begin_review(task_id, workspace_id) or latest
-        self.events.publish(task_id, "task", {"task_id": task_id, "status": latest.get("status"), "checkpoint": latest.get("checkpoint")})
+        self.events.publish(task_id, "task", {"task_id": task_id, "status": latest.get("status"), "state_version": latest.get("state_version"), "checkpoint": latest.get("checkpoint")})
 
     def resume(self, task_id: str, workspace_id: str = "demo") -> dict | None:
         state = self.repository.get(task_id, workspace_id)
@@ -60,7 +73,10 @@ class ResearchService:
         if state.get("status") == "completed":
             return None
         state["status"] = "queued"
-        self.repository.save(task_id, state)
+        try:
+            self.repository.save(task_id, state)
+        except StateConflictError:
+            return None
         self.checkpoints.save(state)
         return state
 
@@ -119,7 +135,7 @@ class ResearchService:
         self._audit(task, "decision_ready", None, None, "awaiting_review")
         self.repository.save(task_id, task)
         self.checkpoints.save(task)
-        self.events.publish(task_id, "task", {"task_id": task_id, "status": "awaiting_review"})
+        self.events.publish(task_id, "task", {"task_id": task_id, "status": "awaiting_review", "state_version": task.get("state_version")})
         return task
 
     def review(self, task_id: str, action: str, comment: str | None = None, constraints: dict | None = None, evidence_dimensions: list[str] | None = None, *, workspace_id: str = "demo", reviewer: str = "reviewer") -> dict | None:
@@ -208,5 +224,5 @@ class ResearchService:
         self.repository.save(task_id, task)
         self.checkpoints.save(task)
         self.checkpoints.record_review(task, action, reviewer, {"comment": comment, "constraints": constraints, "checkpoint": task.get("checkpoint")})
-        self.events.publish(task_id, "task", {"task_id": task_id, "status": task["status"]})
+        self.events.publish(task_id, "task", {"task_id": task_id, "status": task["status"], "state_version": task.get("state_version")})
         return task

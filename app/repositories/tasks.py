@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Index, String, Text, select
+from sqlalchemy import JSON, DateTime, Index, Integer, String, Text, select, update
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.repositories.database import Base, SessionLocal
@@ -14,6 +14,9 @@ class TaskRecord(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    # Database concurrency version. This is deliberately independent from the
+    # Agent checkpoint version, which describes execution position.
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     result: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -28,29 +31,70 @@ class TaskRecord(Base):
     )
 
 
+class StateConflictError(RuntimeError):
+    """A stale task snapshot attempted to overwrite a newer state."""
+
+
 class TaskRepository:
     """MySQL-backed task repository for the Week-2 task API."""
 
-    def save(self, task_id: str, state: dict) -> None:
+    def save(self, task_id: str, state: dict) -> dict:
+        """Persist a complete state snapshot using optimistic compare-and-swap.
+
+        ``checkpoint.version`` tracks Agent progress. ``state_version`` tracks
+        concurrent database writes and is incremented for every successful
+        snapshot write. A stale worker must reload rather than overwrite a
+        reviewer or newer worker update.
+        """
         with SessionLocal.begin() as session:
             task = session.get(TaskRecord, task_id)
             if task is None:
+                state["state_version"] = 1
                 session.add(TaskRecord(
                     task_id=task_id, workspace_id=state.get("workspace_id", "demo"),
                     idempotency_key=state.get("idempotency_key"), question=state["question"],
-                    status=state["status"], result=state,
+                    status=state["status"], state_version=1, result=state,
                 ))
             else:
-                task.status = state["status"]
-                task.result = state
+                expected = int(state.get("state_version", task.state_version))
+                next_version = expected + 1
+                snapshot = {**state, "state_version": next_version}
+                result = session.execute(
+                    update(TaskRecord)
+                    .where(
+                        TaskRecord.task_id == task_id,
+                        TaskRecord.workspace_id == state.get("workspace_id", "demo"),
+                        TaskRecord.state_version == expected,
+                    )
+                    .values(
+                        status=snapshot["status"],
+                        result=snapshot,
+                        state_version=next_version,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+                if result.rowcount != 1:
+                    raise StateConflictError(f"task {task_id} state version conflict: expected {expected}")
+                state["state_version"] = next_version
+        return state
 
     def get(self, task_id: str, workspace_id: str = "demo") -> dict | None:
         with SessionLocal() as session:
-            return session.scalar(select(TaskRecord.result).where(TaskRecord.task_id == task_id, TaskRecord.workspace_id == workspace_id))
+            record = session.scalar(select(TaskRecord).where(TaskRecord.task_id == task_id, TaskRecord.workspace_id == workspace_id))
+            if record is None:
+                return None
+            snapshot = dict(record.result or {})
+            snapshot["state_version"] = record.state_version
+            return snapshot
 
     def find_idempotent(self, key: str, workspace_id: str = "demo") -> dict | None:
         with SessionLocal() as session:
-            return session.scalar(select(TaskRecord.result).where(TaskRecord.workspace_id == workspace_id, TaskRecord.idempotency_key == key).order_by(TaskRecord.created_at.desc()))
+            record = session.scalar(select(TaskRecord).where(TaskRecord.workspace_id == workspace_id, TaskRecord.idempotency_key == key).order_by(TaskRecord.created_at.desc()))
+            if record is None:
+                return None
+            snapshot = dict(record.result or {})
+            snapshot["state_version"] = record.state_version
+            return snapshot
 
     def list_situational_memories(self, workspace_id: str, scope: dict, *, exclude_task_id: str | None = None, limit: int = 5) -> list[dict]:
         """Completed task snapshots are read-only situational memory, not rules."""
