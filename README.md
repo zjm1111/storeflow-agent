@@ -22,7 +22,7 @@ flowchart LR
 
 ## 已实现
 
-- 内部长 PDF 使用 Parent–Child 分块：约 300–500 token 的 Child 完成 BM25/向量、RRF 与重排序；命中后按 `parent_id` 回溯受预算限制的 Parent 上下文。Evidence 始终引用 Child，并保留页码与字符偏移。已批准记忆与 Tavily/公开风险仍保持各自的信任边界。
+- 内部长 PDF 使用 Parent–Child 分块：约 300–500 token 的 Child 完成 BM25/向量、RRF 与重排序；命中后按 `parent_id` 回溯受预算限制的 Parent 上下文。Tavily/网页按约 300–500 token 的临时 Chunk 进行 BM25/向量、RRF 与重排序，不写入内部知识库。Evidence 始终引用精确 Chunk，并保留页码或字符偏移。已批准记忆保持独立的历史 Prior 边界。
 - Evidence ID 约束的风险事件；冲突来源保持待裁决，不自动变成事实。
 - 工作记忆、情景任务快照与仅审核后可复用的长期业务记忆。
 - 三种明确风险偏好的订货策略：成本优先、平衡型、服务优先；展示成本、服务水平、缺货概率、CVaR 与约束可行性。

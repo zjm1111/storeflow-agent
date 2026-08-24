@@ -45,7 +45,7 @@ planned → running → completed
 
 ## 高层白名单与停止规则
 
-Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision_analysis`、`request_human_review`、`finish`。`retrieve_evidence` 是唯一的证据采集入口：内部 PDF 在入库时先按页码/段落形成约 1,000–1,800 token 的 **Parent**，再切成约 300–500 token 的 **Child Chunk**。BM25、向量、RRF 与重排只在 Child 层完成；命中后通过 `parent_id` 取得受 token 预算限制的 Parent 窗口。Evidence 仍只引用 Child，并将 `document_id`、页码、字符 offset 传到底层审计记录。近期公开风险仍按普通来源检索。两条 **Source** 通道并行后统一去重、元数据过滤、上下文压缩和 Evidence ID 绑定。已批准的 **Memory** 同时使用独立的 `approved + scope + TTL → Top-K` 检索：更精确的 scope、经审核置信度和新鲜度决定 Prior 排序，并返回匹配/排除原因；它不进入 Source RRF、Evidence、Context Pack 或 RiskEvent 引用。因此不会出现“Agent 逐项查一次，固定流程再 Fan-out 一次”的重复链路，也不会把历史经验误当作当前事实。未来记忆量明显增长后才考虑在其独立链路中增加 Memory BM25 + Vector + RRF。
+Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision_analysis`、`request_human_review`、`finish`。`retrieve_evidence` 是唯一的证据采集入口：内部 PDF 在入库时先按页码/段落形成约 1,000–1,800 token 的 **Parent**，再切成约 300–500 token 的 **Child Chunk**。BM25、向量、RRF 与重排只在 Child 层完成；命中后通过 `parent_id` 取得受 token 预算限制的 Parent 窗口。Tavily/网页则在每次任务内切为约 300–500 token 的 **Public Chunk**，在 Chunk 层做 BM25、向量、RRF 和重排，但不写入 Qdrant 内部知识库。Evidence 始终引用命中的精确 Chunk，并将 `document_id`、页码或字符 offset 传到底层审计记录。两条 **Source** 通道并行后统一去重、元数据过滤、上下文压缩和 Evidence ID 绑定。已批准的 **Memory** 同时使用独立的 `approved + scope + TTL → Top-K` 检索：更精确的 scope、经审核置信度和新鲜度决定 Prior 排序，并返回匹配/排除原因；它不进入 Source RRF、Evidence、Context Pack 或 RiskEvent 引用。因此不会出现“Agent 逐项查一次，固定流程再 Fan-out 一次”的重复链路，也不会把历史经验误当作当前事实。未来记忆量明显增长后才考虑在其独立链路中增加 Memory BM25 + Vector + RRF。
 
 当库存、需求、到货、成本四维均有证据且没有未裁决关键冲突时，进入决策；否则在最多 6 步、最多 2 次检索、上下文 token 与延迟预算内补证。预算耗尽仍会生成带降级原因的建议草案，并自动交给人工审核，不会自动下单。
 

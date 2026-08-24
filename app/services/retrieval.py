@@ -31,6 +31,14 @@ def _vector(value: str, size: int = 64) -> list[float]:
     return [v / norm for v in values]
 
 
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    """Score ephemeral public chunks without persisting them in Qdrant."""
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(sum(value * value for value in right))
+    return sum(a * b for a, b in zip(left, right)) / denominator if denominator else 0.0
+
+
 def _bm25_scores(query: str, corpus: list[list[str]]) -> list[float]:
     """Small dependency-free BM25 implementation for the first knowledge-base slice."""
     if not corpus:
@@ -369,17 +377,20 @@ class HybridRetriever:
             is_pdf = url.lower().endswith(".pdf")
             sources.append({"source_id": f"web-{hashlib.sha1(url.encode()).hexdigest()[:12]}", "title": url, "url": url, "content": text, "content_hash": content_hash, "retrieved_at": datetime.now(timezone.utc).isoformat(), "source_type": "pdf" if is_pdf else "web"})
         if not sources: return [], [], errors or ["search returned no parsable sources"]
+        # Public sources are short-lived, untrusted observations.  Split them
+        # before every lexical/vector ranking, but keep them out of the durable
+        # internal Qdrant collection so a fetched news page never becomes
+        # accidental private knowledge for a later task.
+        sources = self._public_child_chunks(sources)
         try:
-            self._ensure_collection()
             vectors_to_upsert, embedding_error = self._embed([item["content"] for item in sources])
             if embedding_error: errors.append(embedding_error)
             query_vector, query_error = self._embed([query])
             if query_error and query_error not in errors: errors.append(query_error)
-            points = [{"id": int(hashlib.sha1(item["source_id"].encode()).hexdigest()[:12], 16), "vector": vectors_to_upsert[index], "payload": {key: item[key] for key in ("source_id", "title", "url", "content")}} for index, item in enumerate(sources)]
-            self._qdrant(f"/collections/{getattr(self, 'collection', COLLECTION)}/points?wait=true", {"points": points}, "PUT")
-            response = self._qdrant(f"/collections/{getattr(self, 'collection', COLLECTION)}/points/search", {"vector": query_vector[0], "limit": len(sources), "with_payload": True})
-            vectors = {point["payload"]["source_id"]: point["score"] for point in response["result"]}
-        except Exception: vectors = {}
+            vectors = {source["source_id"]: _cosine_similarity(vector, query_vector[0]) for source, vector in zip(sources, vectors_to_upsert)}
+        except Exception as exc:
+            vectors = {}
+            errors.append(f"public chunk vector fallback: {type(exc).__name__}")
         return sources, self._rerank(query, sources, self._rank(query, sources, vectors), errors), errors
 
     def _knowledge_sources(self) -> list[dict]:
@@ -390,6 +401,13 @@ class HybridRetriever:
         for point in scroll["result"]["points"]:
             payload = point["payload"]
             if not all(key in payload for key in ("source_id", "title", "url", "content")):
+                continue
+            # Prior versions could accidentally upsert public-search payloads
+            # into the shared collection.  Public observations must never be
+            # recalled as internal knowledge on a future task.
+            if payload.get("source_type") not in {None, "internal"}:
+                continue
+            if payload.get("source_type") is None and str(payload.get("source_id", "")).startswith(("web-", "tavily-")):
                 continue
             # Payloads created before explicit upload metadata remain queryable.
             sources.append({
@@ -448,6 +466,34 @@ class HybridRetriever:
             trailing = len(value) - len(value.rstrip())
             grouped.append({"content": value.strip(), "char_start": start + leading, "char_end": end - trailing})
         return [chunk for chunk in grouped if chunk["content"]]
+
+    @classmethod
+    def _public_child_chunks(cls, documents: list[dict]) -> list[dict]:
+        """Split transient web/Tavily documents into normal retrieval chunks.
+
+        Unlike internal PDFs, public pages deliberately have no Parent layer:
+        their structure and freshness are unstable, and the original URL plus
+        child offsets already provide a suitable citation boundary.
+        """
+        children: list[dict] = []
+        for document in documents:
+            document_id = str(document.get("document_id") or document["source_id"])
+            document_hash = str(document.get("content_hash") or hashlib.sha256(document["content"].encode("utf-8")).hexdigest())
+            for index, chunk in enumerate(cls._coalesce_semantic_chunks(document["content"], max_chars=1400)):
+                content = chunk["content"]
+                children.append({
+                    **document,
+                    "source_id": f"{document_id}-chunk-{index:04d}",
+                    "document_id": document_id,
+                    "content": content,
+                    "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    "document_content_hash": document_hash,
+                    "chunk_index": index,
+                    "char_start": chunk["char_start"],
+                    "char_end": chunk["char_end"],
+                    "retrieval_unit": "public_chunk",
+                })
+        return children
 
     @classmethod
     def _pdf_parent_child_chunks(cls, raw: bytes) -> list[dict]:

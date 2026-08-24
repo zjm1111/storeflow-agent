@@ -476,7 +476,7 @@ def parse_sources(state: ResearchState) -> dict:
             # Internal knowledge is already retrieved at child-chunk granularity.
             # Re-splitting it here would lose its original page/offset citation
             # and turn one retrieval unit into duplicated evidence.
-            if source.retrieval_unit == "child_chunk":
+            if source.retrieval_unit in {"child_chunk", "public_chunk"}:
                 chunks = [{
                     "content": source.content,
                     "char_start": source.char_start or 0,
