@@ -16,9 +16,11 @@ from redis import Redis
 from app.core import get_settings
 from app.core.external_fetch import ExternalUrlBlocked, read_public_url, validate_public_url
 from app.core.metrics import EXTERNAL_CALLS, EXTERNAL_FAILURES
+from app.services.context import semantic_chunks
 from app.services.llm import BailianClient, ModelCallError
 
 COLLECTION = "supplymind_knowledge"
+CHUNK_COLLECTION_VERSION = "chunks_v1"
 
 
 def _tokens(value: str) -> list[str]: return re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]", value.lower())
@@ -153,9 +155,12 @@ class HybridRetriever:
         self.tavily_max_results = settings.tavily_max_results
         self.tavily_time_range = settings.tavily_time_range
         self.embedding_dimensions = settings.embedding_dimensions
-        # Keep legacy 64-d vectors readable during migration; remote vectors get
-        # a new collection so Qdrant never mixes incompatible dimensions.
-        self.collection = f"{COLLECTION}_v2_{self.embedding_dimensions}" if settings.model_enabled else COLLECTION
+        # Chunk-level retrieval is deliberately isolated from the older
+        # document-level collection.  Mixing the two would let a long legacy
+        # PDF compete with its own precise child chunks and make rankings hard
+        # to explain.  Existing uploads can simply be re-imported once.
+        suffix = f"{CHUNK_COLLECTION_VERSION}_{self.embedding_dimensions}" if settings.model_enabled else CHUNK_COLLECTION_VERSION
+        self.collection = f"{COLLECTION}_{suffix}"
 
     def _embed(self, texts: list[str]) -> tuple[list[list[float]], str | None]:
         client = BailianClient()
@@ -274,7 +279,14 @@ class HybridRetriever:
         """
         bm25 = _bm25_scores(query, [_tokens(item["content"]) for item in sources])
         maximum = max(bm25) or 1
-        results = [{"source_id": item["source_id"], "title": item["title"], "url": item["url"], "bm25_score": round(float(bm25[i] / maximum), 3), "vector_score": round(float(vectors.get(item["source_id"], 0)), 3)} for i, item in enumerate(sources)]
+        results = [{
+            "source_id": item["source_id"], "title": item["title"], "url": item["url"],
+            "document_id": item.get("document_id"), "chunk_index": item.get("chunk_index"),
+            "page_number": item.get("page_number"), "char_start": item.get("char_start"),
+            "char_end": item.get("char_end"),
+            "bm25_score": round(float(bm25[i] / maximum), 3),
+            "vector_score": round(float(vectors.get(item["source_id"], 0)), 3),
+        } for i, item in enumerate(sources)]
         bm25_ranks = {item["source_id"]: index + 1 for index, item in enumerate(sorted(results, key=lambda item: item["bm25_score"], reverse=True))}
         vector_ranks = {item["source_id"]: index + 1 for index, item in enumerate(sorted(results, key=lambda item: item["vector_score"], reverse=True))}
         rrf_k = 60
@@ -410,32 +422,92 @@ class HybridRetriever:
         """Expose internal PDF sources for the Agent retrieval node."""
         return self._knowledge_results(query, limit)
 
+    @staticmethod
+    def _pdf_child_chunks(raw: bytes) -> list[dict]:
+        """Extract a PDF into independently retrievable, page-aware chunks.
+
+        This is the first step of the internal-RAG migration: BM25, vector
+        search, RRF and rerank all operate on these child-sized chunks.  Parent
+        expansion is intentionally deferred to the next migration so this
+        representation stays easy to audit.
+        """
+        children: list[dict] = []
+        document_offset = 0
+        for page_number, page in enumerate(PdfReader(BytesIO(raw)).pages, start=1):
+            page_text = (page.extract_text() or "").strip()
+            if not page_text:
+                continue
+            # Around 1,400 characters is a practical 300--500-token starting
+            # range for mixed Chinese/English operating manuals.
+            for chunk in semantic_chunks(page_text, max_chars=1400):
+                content = chunk["content"].strip()
+                if content:
+                    children.append({
+                        "content": content,
+                        "page_number": page_number,
+                        "char_start": document_offset + chunk["char_start"],
+                        "char_end": document_offset + chunk["char_end"],
+                    })
+            document_offset += len(page_text) + 1
+        return children
+
     def ingest_pdf(self, filename: str, raw: bytes) -> dict:
         if not raw.startswith(b"%PDF"):
             raise ValueError("Uploaded file is not a PDF")
-        text = " ".join(page.extract_text() or "" for page in PdfReader(BytesIO(raw)).pages).strip()[:12000]
-        if not text:
+        chunks = self._pdf_child_chunks(raw)
+        if not chunks:
             raise ValueError("No extractable text found in PDF")
         content_hash = hashlib.sha256(raw).hexdigest()
-        source_id = f"upload-{content_hash[:12]}"
-        source = {
-            "source_id": source_id,
+        document_id = f"upload-{content_hash[:12]}"
+        url = f"https://local.storeflow/uploads/{document_id}"
+        document = {
+            "source_id": document_id,
+            "document_id": document_id,
             "title": filename,
-            "url": f"https://local.storeflow/uploads/{source_id}",
-            "content": text,
+            "url": url,
+            "content": "\n".join(item["content"] for item in chunks),
             "content_hash": content_hash,
             "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "source_type": "internal",
+            "source_tier": "internal",
+            "chunk_count": len(chunks),
         }
         self._ensure_collection()
+        first_chunk_id = f"{document_id}-chunk-0000"
         try:
-            existing = self._qdrant(f"/collections/{COLLECTION}/points/{int(hashlib.sha1(source_id.encode()).hexdigest()[:12], 16)}", method="GET")
+            existing = self._qdrant(f"/collections/{self.collection}/points/{int(hashlib.sha1(first_chunk_id.encode()).hexdigest()[:12], 16)}", method="GET")
             if existing.get("result"):
-                return {**source, "duplicate": True}
+                return {**document, "duplicate": True}
         except Exception:
             # A missing point is reported by Qdrant as 404; it is safe to insert it.
             pass
-        vectors, _ = self._embed([text])
-        point = {"id": int(hashlib.sha1(source_id.encode()).hexdigest()[:12], 16), "vector": vectors[0], "payload": {key: source[key] for key in ("source_id", "title", "url", "content", "content_hash", "retrieved_at", "source_type")}}
-        self._qdrant(f"/collections/{getattr(self, 'collection', COLLECTION)}/points?wait=true", {"points": [point]}, "PUT")
-        return {**source, "duplicate": False}
+        vectors, _ = self._embed([item["content"] for item in chunks])
+        points = []
+        for index, (chunk, vector) in enumerate(zip(chunks, vectors)):
+            source_id = f"{document_id}-chunk-{index:04d}"
+            source = {
+                "source_id": source_id,
+                "document_id": document_id,
+                "title": filename,
+                "url": url,
+                "content": chunk["content"],
+                # Use a chunk hash for rerank duplicate penalties; the full
+                # document hash remains explicit metadata for audit/dedup.
+                "content_hash": hashlib.sha256(chunk["content"].encode("utf-8")).hexdigest(),
+                "document_content_hash": content_hash,
+                "retrieved_at": document["retrieved_at"],
+                "source_type": "internal",
+                "source_tier": "internal",
+                "chunk_index": index,
+                "page_number": chunk["page_number"],
+                "char_start": chunk["char_start"],
+                "char_end": chunk["char_end"],
+                "retrieval_unit": "child_chunk",
+            }
+            points.append({
+                "id": int(hashlib.sha1(source_id.encode()).hexdigest()[:12], 16),
+                "vector": vector,
+                "payload": source,
+            })
+        self._qdrant(f"/collections/{self.collection}/points?wait=true", {"points": points}, "PUT")
+        return {**document, "duplicate": False}

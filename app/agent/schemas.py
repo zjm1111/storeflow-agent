@@ -51,6 +51,14 @@ class Source(BaseModel):
     channel: str | None = None
     source_tier: Literal["official", "internal", "news", "web", "fixture"] = "web"
     expires_at: datetime | None = None
+    # Internal PDF retrieval stores individual child chunks.  These fields are
+    # carried through task state so Evidence can still point to the exact page
+    # and character range rather than being re-split later in the workflow.
+    chunk_index: int | None = Field(default=None, ge=0)
+    page_number: int | None = Field(default=None, ge=1)
+    char_start: int | None = Field(default=None, ge=0)
+    char_end: int | None = Field(default=None, ge=0)
+    retrieval_unit: str | None = None
 
 
 class EvidenceSnippet(BaseModel):

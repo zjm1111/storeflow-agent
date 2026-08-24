@@ -13,7 +13,7 @@ cd C:\Users\17818\Desktop\codex_learn\agent_program\supplymind
 
 ## 固定演示流程
 
-1. 导入 `output/pdf/storeflow_demo_operations_pack.pdf`，或使用控制台“本地知识库”上传门店资料。
+1. 导入 `output/pdf/storeflow_demo_operations_pack.pdf`，或使用控制台“本地知识库”上传门店资料。内部 PDF 会按页码/段落切成可检索 Chunk；如你在本次版本前已上传过资料，请重新导入一次，避免旧的整篇文档向量与新 Chunk 混用。
 2. 创建问题：`本周末暴雨叠加饮料促销，上海浦东门店当前库存只够 1.5 天，应订多少？`
 3. 填写 scope：区域“上海浦东”、门店“浦东示范店”、品类“瓶装饮料”、SKU“BEV-500ML”；填写库存、日均销量、促销、中央仓提前期与预算等约束。
 4. 在“Agent 运行轨迹”查看白名单工具选择；在“证据中心”查看并行通道、RRF、精排及 Evidence ID。

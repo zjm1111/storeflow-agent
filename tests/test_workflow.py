@@ -5,7 +5,7 @@ os.environ["MYSQL_URL"] = "sqlite://"
 from fastapi.testclient import TestClient
 
 from app.api.tasks import service
-from app.agent.nodes.workflow import retrieve_sources
+from app.agent.nodes.workflow import parse_sources, retrieve_sources
 from app.agent.state import initial_state
 from app.main import app
 from app.services import retrieval
@@ -42,25 +42,31 @@ def test_schema_failure_is_recorded_and_repaired_with_valid_plan():
     assert result["decision"] is not None
 
 
-def test_pdf_ingestion_marks_a_second_identical_upload_as_duplicate(monkeypatch):
+def test_pdf_ingestion_creates_page_aware_child_chunks_and_deduplicates_document(monkeypatch):
     class Reader:
-        pages = [type("Page", (), {"extract_text": lambda self: "Rain delays rider delivery and raises refund cost."})()]
+        pages = [
+            type("Page", (), {"extract_text": lambda self: "Rain delays central warehouse delivery and raises refund cost."})(),
+            type("Page", (), {"extract_text": lambda self: "Promotion demand requires extra safety stock for the weekend."})(),
+        ]
 
     class FakeRetriever(retrieval.HybridRetriever):
         def __init__(self):
             self.points = set()
+            self.written_points = []
+            self.collection = "supplymind_knowledge_chunks_v1"
 
         def _ensure_collection(self):
             pass
 
         def _qdrant(self, path, body=None, method="POST"):
-            if method == "GET" and path.startswith("/collections/supplymind_knowledge/points/"):
+            if method == "GET" and path.startswith(f"/collections/{self.collection}/points/"):
                 point_id = path.rsplit("/", 1)[-1]
                 if point_id not in self.points:
                     raise RuntimeError("point not found")
                 return {"result": {"id": point_id}}
             if method == "PUT":
-                self.points.add(str(body["points"][0]["id"]))
+                self.points.update(str(point["id"]) for point in body["points"])
+                self.written_points.extend(body["points"])
                 return {"result": {"status": "completed"}}
             raise AssertionError(f"Unexpected Qdrant request: {method} {path}")
 
@@ -69,6 +75,13 @@ def test_pdf_ingestion_marks_a_second_identical_upload_as_duplicate(monkeypatch)
     first = client.ingest_pdf("risk.pdf", b"%PDF-1.7 same file")
     second = client.ingest_pdf("renamed-risk.pdf", b"%PDF-1.7 same file")
     assert first["duplicate"] is False
+    assert first["chunk_count"] == 2
+    assert len(client.written_points) == 2
+    first_payload, second_payload = (point["payload"] for point in client.written_points)
+    assert first_payload["retrieval_unit"] == "child_chunk"
+    assert first_payload["page_number"] == 1
+    assert second_payload["page_number"] == 2
+    assert first_payload["document_id"] == second_payload["document_id"] == first["document_id"]
     assert second["duplicate"] is True
     assert second["source_id"] == first["source_id"]
 
@@ -87,6 +100,34 @@ def test_retrieve_sources_includes_matching_internal_knowledge(monkeypatch):
     result = retrieve_sources(state)
     assert result["sources"][0]["source_id"] == "upload-123"
     assert result["hybrid_results"][0]["source_id"] == "upload-123"
+
+
+def test_retrieved_pdf_child_chunk_becomes_one_exact_evidence_snippet():
+    state = initial_state("task-chunk", "How should a store react to a delivery delay?")
+    state["sources"] = [{
+        "source_id": "upload-123-chunk-0002",
+        "document_id": "upload-123",
+        "title": "delivery.pdf",
+        "url": "https://local.storeflow/uploads/upload-123",
+        "content": "If delivery is delayed over 24 hours, keep two days of safety stock.",
+        "retrieved_at": "2026-08-20T00:00:00+00:00",
+        "source_type": "internal",
+        "source_tier": "internal",
+        "retrieval_unit": "child_chunk",
+        "chunk_index": 2,
+        "page_number": 3,
+        "char_start": 2400,
+        "char_end": 2468,
+    }]
+    state["working_memory"] = {"source_rerank_ids": ["upload-123-chunk-0002"]}
+    result = parse_sources(state)
+    assert len(result["evidence"]) == 1
+    evidence = result["evidence"][0]
+    assert evidence["source_id"] == "upload-123-chunk-0002"
+    assert evidence["document_id"] == "upload-123"
+    assert evidence["chunk_index"] == 2
+    assert evidence["page_number"] == 3
+    assert evidence["char_start"] == 2400
 
 
 def test_low_value_search_pages_are_not_accepted_as_risk_sources():

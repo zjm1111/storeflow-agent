@@ -456,15 +456,28 @@ def parse_sources(state: ResearchState) -> dict:
         sources = [item for item in state.get("sources", []) if not selected_source_ids or item.get("source_id") in selected_source_ids]
         for source_data in sources:
             source = Source.model_validate(source_data)
-            chunks = semantic_chunks(source.content)[:6]
+            # Internal knowledge is already retrieved at child-chunk granularity.
+            # Re-splitting it here would lose its original page/offset citation
+            # and turn one retrieval unit into duplicated evidence.
+            if source.retrieval_unit == "child_chunk":
+                chunks = [{
+                    "content": source.content,
+                    "char_start": source.char_start or 0,
+                    "char_end": source.char_end if source.char_end is not None else len(source.content),
+                    "chunk_index": source.chunk_index or 0,
+                    "page_number": source.page_number,
+                }]
+            else:
+                chunks = semantic_chunks(source.content)[:6]
             for index, chunk_data in enumerate(chunks):
                 chunk = chunk_data["content"]
                 evidence.append(EvidenceSnippet(
                     evidence_id=f"ev-{source.source_id}-{index}", source_id=source.source_id,
                     source_type=source.source_type, source_uri=str(source.url),
                     quote=chunk, relevance_score=0.8, authority_score=0.7,
-                    freshness_score=0.9, overall_score=0.8, chunk_index=index,
-                    document_id=source.document_id, char_start=chunk_data["char_start"], char_end=chunk_data["char_end"],
+                    freshness_score=0.9, overall_score=0.8, chunk_index=chunk_data.get("chunk_index", index),
+                    document_id=source.document_id, page_number=chunk_data.get("page_number"),
+                    char_start=chunk_data["char_start"], char_end=chunk_data["char_end"],
                 ).model_dump(mode="json"))
         # Selection happens after scoring so a lower-quality early chunk cannot
         # consume the model's context budget.

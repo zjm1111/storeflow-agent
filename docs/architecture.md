@@ -7,7 +7,7 @@ flowchart TD
   A[采购问题和业务约束] --> B[ReAct Manager]
   B --> C{高层动作}
   C -->|retrieve evidence| D[复合检索工具]
-  D --> D1[内部 PDF: BM25 和向量]
+  D --> D1[内部 PDF Child Chunk: BM25 和向量]
   D --> D2[近期公开风险: Tavily]
   D --> D3[已批准长期记忆: scope 和 TTL]
   D1 --> E[Source RRF: rerank: 去重: 上下文压缩]
@@ -45,7 +45,7 @@ planned → running → completed
 
 ## 高层白名单与停止规则
 
-Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision_analysis`、`request_human_review`、`finish`。`retrieve_evidence` 是唯一的证据采集入口：内部资料与近期公开风险两条 **Source** 通道并行后统一进行 RRF、重排、去重、元数据过滤、上下文压缩和 Evidence ID 绑定。已批准的 **Memory** 同时使用独立的 `approved + scope + TTL → Top-K` 检索：更精确的 scope、经审核置信度和新鲜度决定 Prior 排序，并返回匹配/排除原因；它不进入 Source RRF、Evidence、Context Pack 或 RiskEvent 引用。因此不会出现“Agent 逐项查一次，固定流程再 Fan-out 一次”的重复链路，也不会把历史经验误当作当前事实。未来记忆量明显增长后才考虑在这条独立链路中增加 Memory BM25 + Vector + RRF。
+Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision_analysis`、`request_human_review`、`finish`。`retrieve_evidence` 是唯一的证据采集入口：内部 PDF 在入库时先按页码/段落切成约 300–500 token 的 **Child Chunk**；BM25、向量、RRF 与重排都在 chunk 层完成，并将 `document_id`、页码、字符 offset 传到 Evidence。近期公开风险仍按普通来源检索。两条 **Source** 通道并行后统一去重、元数据过滤、上下文压缩和 Evidence ID 绑定。已批准的 **Memory** 同时使用独立的 `approved + scope + TTL → Top-K` 检索：更精确的 scope、经审核置信度和新鲜度决定 Prior 排序，并返回匹配/排除原因；它不进入 Source RRF、Evidence、Context Pack 或 RiskEvent 引用。因此不会出现“Agent 逐项查一次，固定流程再 Fan-out 一次”的重复链路，也不会把历史经验误当作当前事实。下一阶段才会在 Child 命中后按 `parent_id` 做 Parent 上下文扩展；未来记忆量明显增长后才考虑在其独立链路中增加 Memory BM25 + Vector + RRF。
 
 当库存、需求、到货、成本四维均有证据且没有未裁决关键冲突时，进入决策；否则在最多 6 步、最多 2 次检索、上下文 token 与延迟预算内补证。预算耗尽仍会生成带降级原因的建议草案，并自动交给人工审核，不会自动下单。
 
