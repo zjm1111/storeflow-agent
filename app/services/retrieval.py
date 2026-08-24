@@ -53,13 +53,16 @@ def _bm25_scores(query: str, corpus: list[list[str]]) -> list[float]:
 def rrf_fuse_lanes(lanes: dict[str, list[dict]], *, k: int = 60) -> list[dict]:
     """Fuse independently ranked candidate lanes without hiding their origins.
 
-    Candidate IDs may represent evidence sources or approved memory. A caller
-    keeps non-evidence memory out of the model evidence pack, while still
-    exposing its rank in the retrieval funnel.
+    Callers must pass candidates from one fact-bearing retrieval domain. In
+    StoreFlow this is used for current Sources only; approved Memory is a
+    separate scope/TTL-filtered historical-prior chain and must not be passed
+    to global RRF.
     """
     fused: dict[str, dict] = {}
     for lane, candidates in lanes.items():
         for rank, candidate in enumerate(candidates, 1):
+            if candidate.get("memory_id") and not candidate.get("source_id"):
+                raise ValueError("approved memory must use the historical-prior chain, not source RRF")
             candidate_id = str(candidate.get("candidate_id") or candidate.get("source_id") or candidate.get("memory_id"))
             if not candidate_id:
                 continue
@@ -67,6 +70,16 @@ def rrf_fuse_lanes(lanes: dict[str, list[dict]], *, k: int = 60) -> list[dict]:
             current["rrf_score"] += 1 / (k + rank)
             current["rrf_lanes"].append(lane)
     return sorted(({**item, "rrf_score": round(float(item["rrf_score"]), 6)} for item in fused.values()), key=lambda item: item["rrf_score"], reverse=True)
+
+
+def rerank_source_candidates(query: str, sources: list[dict], fused_candidates: list[dict], errors: list[str]) -> list[dict]:
+    """Apply the final reranker after source-only global RRF fusion.
+
+    This deliberately accepts Source records only.  Historical business
+    memories are priors with a different trust boundary and must not be
+    supplied here.
+    """
+    return HybridRetriever()._rerank(query, sources, fused_candidates, errors)
 
 
 def _is_relevant(query: str, content: str) -> bool:

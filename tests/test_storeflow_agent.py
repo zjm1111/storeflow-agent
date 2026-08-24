@@ -121,10 +121,37 @@ def test_agent_accepts_a_structured_model_tool_choice(monkeypatch):
     assert result["token_usage"] == 12
 
 
-def test_rrf_tracks_lanes_without_turning_memory_into_evidence():
-    fused = rrf_fuse_lanes({"internal": [{"source_id": "s1"}], "memory": [{"memory_id": "m1"}]})
-    assert {item["candidate_id"] for item in fused} == {"s1", "m1"}
+def test_rrf_tracks_source_lanes_only():
+    fused = rrf_fuse_lanes({"internal": [{"source_id": "s1"}], "public": [{"source_id": "s2"}]})
+    assert {item["candidate_id"] for item in fused} == {"s1", "s2"}
     assert all(item["rrf_lanes"] for item in fused)
+
+
+def test_rrf_rejects_memory_candidates_to_preserve_fact_boundary():
+    import pytest
+
+    with pytest.raises(ValueError, match="historical-prior chain"):
+        rrf_fuse_lanes({"approved_memory": [{"memory_id": "m1"}]})
+
+
+def test_seeded_current_source_enters_source_rrf_and_rerank(monkeypatch):
+    class Retriever:
+        def retrieve_knowledge(self, _query): return [], []
+
+        def _rerank(self, query, sources, ranked, errors):
+            return HybridRetriever._rerank(self, query, sources, ranked, errors)
+
+    class Memory:
+        def list_for_task(self, _workspace, _scope): return [{"memory_id": "m1", "content": "仅作历史先验"}]
+
+    monkeypatch.setattr("app.agent.nodes.workflow.HybridRetriever", Retriever)
+    monkeypatch.setattr("app.agent.nodes.workflow.MemoryService", Memory)
+    state = initial_state("seeded-source", "暴雨促销下门店饮料补货")
+    state["sources"] = [{"source_id": "fixture-1", "title": "门店库存日报", "url": "https://example.com/fixture", "content": "暴雨期间门店饮料促销，库存仅够 1.5 天。", "retrieved_at": "2026-08-22T00:00:00Z"}]
+    result = retrieve_sources(state)
+    assert [item["source_id"] for item in result["hybrid_results"]] == ["fixture-1"]
+    assert result["working_memory"]["source_rerank_ids"] == ["fixture-1"]
+    assert result["recalled_memories"][0]["memory_id"] == "m1"
 
 
 def test_retrieval_fans_out_independent_lanes_then_records_fan_in(monkeypatch):
@@ -149,8 +176,11 @@ def test_retrieval_fans_out_independent_lanes_then_records_fan_in(monkeypatch):
     )
     result = retrieve_sources(initial_state("parallel", "暴雨促销期间门店订货", scope={"store": "浦东门店"}))
     parallel = result["working_memory"]["parallel_retrieval"]
-    assert parallel["mode"] == "fan_out_fan_in"
+    assert parallel["mode"] == "source_fan_out_with_memory_prior"
     assert set(parallel["completed_lanes"]) == {"internal_knowledge", "public_risk", "approved_memory"}
     assert result["dependency_execution"]["tavily"]["status"] in {"used", "degraded", "not_configured"}
     assert "estimated_cost_usd" in result["dependency_execution"]["tavily"]
-    assert {item["candidate_id"] for item in result["hybrid_results"]} == {"internal-1", "public-1", "memory:m1"}
+    assert {item["candidate_id"] for item in result["hybrid_results"]} == {"internal-1", "public-1"}
+    assert result["recalled_memories"][0]["memory_id"] == "m1"
+    assert result["working_memory"]["historical_prior"]["kind"] == "approved_memory_prior"
+    assert "not current RiskEvent evidence" in result["working_memory"]["historical_prior"]["fact_boundary"]

@@ -9,12 +9,14 @@ flowchart TD
   C -->|retrieve evidence| D[复合检索工具]
   D --> D1[内部 PDF: BM25 和向量]
   D --> D2[近期公开风险: Tavily]
-  D --> D3[已批准长期记忆]
-  D1 --> E[RRF: rerank: 去重: 上下文压缩]
+  D --> D3[已批准长期记忆: scope 和 TTL]
+  D1 --> E[Source RRF: rerank: 去重: 上下文压缩]
   D2 --> E
-  D3 --> E
-  E --> F[Evidence ID 与 Observation]
-  F --> B
+  E --> F[Evidence ID 和 Context Pack]
+  D3 --> G[Historical Prior Top-K]
+  F --> H[受控 Observation]
+  G --> H
+  H --> B
   C -->|assess evidence gap| G[四维覆盖和冲突判断]
   G --> B
   C -->|run decision analysis| H[RiskEvent]
@@ -43,7 +45,7 @@ planned → running → completed
 
 ## 高层白名单与停止规则
 
-Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision_analysis`、`request_human_review`、`finish`。`retrieve_evidence` 是唯一的证据采集入口：一次动作内部并行执行三路只读检索，再统一进行 RRF、重排、去重、元数据过滤、上下文压缩和 Evidence ID 绑定。因此不会出现“Agent 逐项查一次，固定流程再 Fan-out 一次”的重复链路。
+Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision_analysis`、`request_human_review`、`finish`。`retrieve_evidence` 是唯一的证据采集入口：内部资料与近期公开风险两条 **Source** 通道并行后统一进行 RRF、重排、去重、元数据过滤、上下文压缩和 Evidence ID 绑定。已批准的 **Memory** 同时按 scope 与 TTL 筛选为 Historical Prior Top-K，但不进入 Source RRF、Evidence、Context Pack 或 RiskEvent 引用。因此不会出现“Agent 逐项查一次，固定流程再 Fan-out 一次”的重复链路，也不会把历史经验误当作当前事实。
 
 当库存、需求、到货、成本四维均有证据且没有未裁决关键冲突时，进入决策；否则在最多 6 步、最多 2 次检索、上下文 token 与延迟预算内补证。预算耗尽仍会生成带降级原因的建议草案，并自动交给人工审核，不会自动下单。
 

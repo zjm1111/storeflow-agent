@@ -9,7 +9,7 @@ from app.agent.fixtures import SAMPLE_SOURCES
 from app.core import get_settings
 from app.agent.schemas import AgentAction, CitedReport, EvidenceSnippet, NodeEvent, ResearchPlan, RiskEvent, Source
 from app.agent.state import ResearchState
-from app.services.retrieval import HybridRetriever, rrf_fuse_lanes
+from app.services.retrieval import HybridRetriever, rerank_source_candidates, rrf_fuse_lanes
 from app.services.llm import BailianClient, ModelCallError
 from app.services.memory import MemoryService
 from app.services.context import build_context_pack, semantic_chunks
@@ -51,11 +51,13 @@ def _model_record(state: ResearchState, metadata: dict) -> dict:
 def initialize(state: ResearchState) -> dict:
     def worker():
         scope = state.get("scope", {})
-        memories = MemoryService().list_for_task(state.get("workspace_id", "demo"), scope)
         situations = TaskRepository().list_situational_memories(state.get("workspace_id", "demo"), scope, exclude_task_id=state.get("task_id"))
         return {
             "status": "running", "sources": SAMPLE_SOURCES,
-            "recalled_memories": memories,
+            # Approved business memory is fetched by the composite retrieval
+            # action. Keeping initialization read-free prevents the same prior
+            # from being fetched once here and once again during retrieval.
+            "recalled_memories": state.get("recalled_memories", []),
             "situational_memories": situations,
             "working_memory": {**state.get("working_memory", {}), "coverage_gaps": state.get("missing_dimensions", [])},
             "model_execution": [BailianClient().status()],
@@ -292,10 +294,10 @@ def plan_research(state: ResearchState) -> dict:
 def _retrieve_parallel_lanes(state: ResearchState, query: str) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict], list[str], dict]:
     """Fan out only independent, read-only evidence acquisition.
 
-    Internal PDF/vector retrieval, recent public-risk retrieval and approved
-    memory lookup share no write side effects.  They can therefore run together.
-    RRF fusion, reranking and context selection deliberately remain a fan-in
-    stage below: their inputs and ranking policy must be evaluated together.
+    Internal PDF/vector retrieval and recent public-risk retrieval are source
+    lanes. Approved memory is fetched in parallel only as a scoped historical
+    prior. Source lanes alone enter RRF/rerank and can become Evidence; memory
+    is never fused into current facts or citations.
     """
     started = perf_counter()
     workspace_id, scope = state.get("workspace_id", "demo"), state.get("scope", {})
@@ -342,7 +344,9 @@ def _retrieve_parallel_lanes(state: ResearchState, query: str) -> tuple[list[dic
     memories = outcomes.get("approved_memory") or state.get("recalled_memories", [])
     lane_errors.extend(public_errors)
     telemetry = {
-        "mode": "fan_out_fan_in",
+        "mode": "source_fan_out_with_memory_prior",
+        "source_lanes": ["internal_knowledge", "public_risk"],
+        "memory_lane": "approved_memory_prior",
         "lanes": ["internal_knowledge", "public_risk", "approved_memory"],
         "completed_lanes": [lane for lane in ("internal_knowledge", "public_risk", "approved_memory") if outcomes.get(lane) is not None],
         "duration_ms": round((perf_counter() - started) * 1000, 1),
@@ -369,21 +373,42 @@ def retrieve_sources(state: ResearchState) -> dict:
         # Fixture/internal evidence remains the deterministic baseline when live
         # search is unavailable; it is never silently replaced by an empty crawl.
         all_sources = list({item["source_id"]: item for item in [*state.get("sources", []), *knowledge_sources, *sources]}.values())
-        memory_candidates = [{"memory_id": item["memory_id"], "candidate_id": f"memory:{item['memory_id']}", "title": item["content"][:100], "candidate_type": "approved_memory"} for item in memories]
-        fused = rrf_fuse_lanes({"internal_knowledge": knowledge_scores, "public_web": scores, "approved_memory": memory_candidates, "hybrid_vector_bm25": [*knowledge_scores, *scores]})
-        # Reranking applies only to source candidates. Memory is a scoped prior,
-        # never model evidence and therefore never becomes a RiskEvent citation.
-        by_source = {item.get("source_id"): item for item in [*knowledge_scores, *scores]}
-        all_scores = [{**item, "rerank_score": by_source.get(item.get("source_id"), {}).get("rerank_score", item["rrf_score"])} for item in fused]
+        # Only source candidates enter global RRF.  Approved memory is a
+        # separately scoped/TTL-filtered historical prior and must never gain
+        # factual weight by being mixed with current sources.
+        seeded_source_candidates = [{"source_id": item["source_id"]} for item in state.get("sources", [])]
+        fused = rrf_fuse_lanes({
+            "internal_knowledge": knowledge_scores,
+            "public_web": scores,
+            # Checked-in demo fixtures or an earlier retry's sources are still
+            # current Sources, so they join the same fact-bearing chain.
+            "seeded_source": seeded_source_candidates,
+        })
+        # Reranking applies only to source candidates. Memory is a historical
+        # prior, never model evidence and therefore never becomes a RiskEvent
+        # citation or a Context Pack item.
+        rerank_input = [{**item, "rerank_score": item["rrf_score"]} for item in fused]
+        all_scores = rerank_source_candidates(query, all_sources, rerank_input, errors)
+        historical_prior = {
+            "kind": "approved_memory_prior",
+            "count": len(memories),
+            "items": [{key: item.get(key) for key in ("memory_id", "content", "scope", "confidence", "expires_at", "evidence_ids")} for item in memories],
+            "fact_boundary": "Historical memory is a reviewed prior, not current RiskEvent evidence or a citation source.",
+        }
         if not all_sources:
-            return {"hybrid_results": [], "search_count": search_count, "recalled_memories": memories, "dependency_execution": telemetry, "working_memory": {**state.get("working_memory", {}), "parallel_retrieval": telemetry}, "__recovery_message": "; ".join(errors)}
+            return {"hybrid_results": [], "search_count": search_count, "recalled_memories": memories, "dependency_execution": telemetry, "working_memory": {**state.get("working_memory", {}), "parallel_retrieval": telemetry, "historical_prior": historical_prior, "source_rerank_ids": []}, "__recovery_message": "; ".join(errors)}
         return {
             "sources": [Source.model_validate(item).model_dump(mode="json") for item in all_sources],
             "hybrid_results": all_scores,
             "search_count": search_count,
             "recalled_memories": memories,
             "dependency_execution": telemetry,
-            "working_memory": {**state.get("working_memory", {}), "parallel_retrieval": telemetry},
+            "working_memory": {
+                **state.get("working_memory", {}),
+                "parallel_retrieval": telemetry,
+                "historical_prior": historical_prior,
+                "source_rerank_ids": [item["source_id"] for item in all_scores],
+            },
             "__recovery_message": "; ".join(errors) if errors else None,
         }
     return _with_trace(state, "retrieve_sources", worker)
@@ -419,7 +444,9 @@ def replan(state: ResearchState) -> dict:
 def parse_sources(state: ResearchState) -> dict:
     def worker():
         evidence = []
-        for source_data in state.get("sources", []):
+        selected_source_ids = set(state.get("working_memory", {}).get("source_rerank_ids", []))
+        sources = [item for item in state.get("sources", []) if not selected_source_ids or item.get("source_id") in selected_source_ids]
+        for source_data in sources:
             source = Source.model_validate(source_data)
             chunks = semantic_chunks(source.content)[:6]
             for index, chunk_data in enumerate(chunks):
