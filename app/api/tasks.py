@@ -126,7 +126,7 @@ def get_task_memory(task_id: str, principal: Principal = Depends(get_current_pri
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {"task_id": task_id, "working_memory": task.get("working_memory", {}), "situational_memories": task.get("situational_memories", []), "recalled_memories": task.get("recalled_memories", []), "memory_conflicts": task.get("memory_conflicts", []), "candidate": task.get("memory_candidate")}
+    return {"task_id": task_id, "working_memory": task.get("working_memory", {}), "historical_prior": task.get("working_memory", {}).get("historical_prior", {}), "situational_memories": task.get("situational_memories", []), "recalled_memories": task.get("recalled_memories", []), "memory_conflicts": task.get("memory_conflicts", []), "candidate": task.get("memory_candidate")}
 
 
 def _schedule_research(task: dict, workspace_id: str, background_tasks: BackgroundTasks) -> None:

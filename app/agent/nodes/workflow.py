@@ -318,7 +318,12 @@ def _retrieve_parallel_lanes(state: ResearchState, query: str) -> tuple[list[dic
         return HybridRetriever().retrieve(query)
 
     def memory_lane():
-        return MemoryService().list_for_task(workspace_id, scope)
+        service = MemoryService()
+        # Keep test doubles and the legacy list method compatible while the
+        # production path preserves independent retrieval diagnostics.
+        if hasattr(service, "retrieve_approved_priors"):
+            return service.retrieve_approved_priors(workspace_id, scope)
+        return {"items": service.list_for_task(workspace_id, scope), "retrieval": {"strategy": "legacy_list_for_task"}}
 
     lane_errors: list[str] = []
     outcomes: dict[str, object] = {}
@@ -341,12 +346,14 @@ def _retrieve_parallel_lanes(state: ResearchState, query: str) -> tuple[list[dic
 
     knowledge_sources, knowledge_scores = outcomes.get("internal_knowledge") or ([], [])
     public_sources, public_scores, public_errors = outcomes.get("public_risk") or ([], [], [])
-    memories = outcomes.get("approved_memory") or state.get("recalled_memories", [])
+    memory_result = outcomes.get("approved_memory") or {"items": state.get("recalled_memories", []), "retrieval": {"strategy": "prior_snapshot_fallback"}}
+    memories = memory_result.get("items", [])
     lane_errors.extend(public_errors)
     telemetry = {
         "mode": "source_fan_out_with_memory_prior",
         "source_lanes": ["internal_knowledge", "public_risk"],
         "memory_lane": "approved_memory_prior",
+        "memory_prior": memory_result.get("retrieval", {}),
         "lanes": ["internal_knowledge", "public_risk", "approved_memory"],
         "completed_lanes": [lane for lane in ("internal_knowledge", "public_risk", "approved_memory") if outcomes.get(lane) is not None],
         "duration_ms": round((perf_counter() - started) * 1000, 1),
@@ -392,7 +399,8 @@ def retrieve_sources(state: ResearchState) -> dict:
         historical_prior = {
             "kind": "approved_memory_prior",
             "count": len(memories),
-            "items": [{key: item.get(key) for key in ("memory_id", "content", "scope", "confidence", "expires_at", "evidence_ids")} for item in memories],
+            "items": [{key: item.get(key) for key in ("memory_id", "content", "scope", "confidence", "expires_at", "evidence_ids", "prior_rank_score", "match_reason")} for item in memories],
+            "retrieval": telemetry.get("memory_prior", {}),
             "fact_boundary": "Historical memory is a reviewed prior, not current RiskEvent evidence or a citation source.",
         }
         if not all_sources:

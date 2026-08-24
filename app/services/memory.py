@@ -25,14 +25,23 @@ class MemoryService:
             session.add(record)
         return self._dump(record)
 
-    def list_for_task(self, workspace_id: str, scope: dict, limit: int = 8) -> list[dict]:
+    _SCOPE_KEYS = ("region", "warehouse", "store", "category", "sku", "channel")
+
+    def retrieve_approved_priors(self, workspace_id: str, scope: dict, limit: int = 8) -> dict:
+        """Return scoped, non-expired approved memories as historical priors.
+
+        This is intentionally not a RAG vector/BM25 path.  At the current
+        project scale, deterministic scope + TTL filtering is more auditable
+        than semantic similarity.  The returned ranking explains why a prior
+        was recalled and must not be used as current factual evidence.
+        """
         now = datetime.now(timezone.utc)
         with SessionLocal() as session:
             records = session.scalars(select(MemoryItemRecord).where(
                 MemoryItemRecord.workspace_id == workspace_id,
                 MemoryItemRecord.status == "approved",
             ).order_by(MemoryItemRecord.created_at.desc())).all()
-        matched = []
+        matched, expired_count, scope_mismatch_count = [], 0, 0
         for item in records:
             # MySQL DATETIME can be returned without tzinfo even when the ORM
             # column is declared timezone-aware. Treat such stored values as
@@ -41,11 +50,50 @@ class MemoryService:
             if expires_at and expires_at.tzinfo is None:
                 expires_at = expires_at.replace(tzinfo=timezone.utc)
             if expires_at and expires_at <= now:
+                expired_count += 1
                 continue
             item_scope = item.scope or {}
-            if all(not item_scope.get(key) or not scope.get(key) or item_scope[key] == scope[key] for key in ("region", "warehouse", "store", "category", "sku", "channel")):
-                matched.append(self._dump(item))
-        return matched[:limit]
+            scoped_keys = [key for key in self._SCOPE_KEYS if item_scope.get(key)]
+            exact_keys = [key for key in scoped_keys if scope.get(key) == item_scope[key]]
+            # A prior scoped to a store/SKU cannot be applied to a task that
+            # lacks that field: unknown is not an implicit wildcard.
+            if len(exact_keys) != len(scoped_keys):
+                scope_mismatch_count += 1
+                continue
+            dumped = self._dump(item)
+            # More exact scope is preferred, then reviewer confidence, then
+            # recency. This is a ranking explanation, not a truth confidence.
+            scope_score = len(exact_keys) / max(1, len(self._SCOPE_KEYS))
+            age_days = max(0.0, (now - (item.created_at.replace(tzinfo=timezone.utc) if item.created_at.tzinfo is None else item.created_at)).total_seconds() / 86400)
+            freshness_score = 1 / (1 + age_days / 90)
+            prior_score = round(0.55 * scope_score + 0.30 * float(item.confidence) + 0.15 * freshness_score, 4)
+            dumped["prior_rank_score"] = prior_score
+            dumped["match_reason"] = {
+                "exact_scope_keys": exact_keys,
+                "scope_score": round(scope_score, 4),
+                "reviewed_confidence": float(item.confidence),
+                "freshness_score": round(freshness_score, 4),
+                "ttl_valid": True,
+            }
+            matched.append(dumped)
+        matched.sort(key=lambda item: (item["prior_rank_score"], item.get("created_at") or ""), reverse=True)
+        selected = matched[:limit]
+        return {
+            "items": selected,
+            "retrieval": {
+                "strategy": "approved_scope_ttl_top_k",
+                "limit": limit,
+                "approved_candidates": len(records),
+                "scope_ttl_matches": len(matched),
+                "expired_excluded": expired_count,
+                "scope_mismatch_excluded": scope_mismatch_count,
+                "fact_boundary": "Historical priors cannot become current RiskEvent evidence or citations.",
+            },
+        }
+
+    def list_for_task(self, workspace_id: str, scope: dict, limit: int = 8) -> list[dict]:
+        """Compatibility list API; new callers should retain retrieval metadata."""
+        return self.retrieve_approved_priors(workspace_id, scope, limit)["items"]
 
     def get(self, memory_id: str, workspace_id: str = "demo") -> dict | None:
         with SessionLocal() as session:
