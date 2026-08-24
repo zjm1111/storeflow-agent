@@ -5,6 +5,7 @@ try:
     from celery import Celery
 except ImportError:  # local no-dependency test mode
     celery_app = None
+    run_task = None
 else:
     from app.core import get_settings
     settings = get_settings()

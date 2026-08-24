@@ -80,7 +80,7 @@ def resume_task(task_id: str, background_tasks: BackgroundTasks, principal: Prin
     task = service.resume(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found or already completed")
-    background_tasks.add_task(service.run, task_id, principal.workspace_id)
+    _schedule_research(task, principal.workspace_id, background_tasks)
     return {"task_id": task_id, "status": "queued", "checkpoint": task.get("checkpoint")}
 
 
@@ -132,11 +132,12 @@ def get_task_memory(task_id: str, principal: Principal = Depends(get_current_pri
 def _schedule_research(task: dict, workspace_id: str, background_tasks: BackgroundTasks) -> None:
     """Use Celery for both initial research and review-triggered replanning."""
     try:
-        from app.worker import celery_app
-        if celery_app is None:
+        from app.worker import celery_app, run_task
+        if celery_app is None or run_task is None:
             raise RuntimeError("Celery is not installed")
-        celery_app.send_task(
-            "supplymind.run_task",
+        # ``apply_async`` reaches the same named worker task in production and
+        # also honours Celery's task_always_eager setting in isolated tests.
+        run_task.apply_async(
             args=[task["task_id"], task.get("checkpoint", {}).get("version"), workspace_id, task.get("state_version")],
         )
     except Exception:

@@ -204,7 +204,19 @@ class ResearchService:
             task["agent_finished"] = False
             task["review_requested"] = False
             task["next_action"] = None
+            task["active_action"] = None
+            # A review-driven replan is a new bounded Agent pass. Keep the
+            # immutable audit/trace history, but do not carry the previous
+            # pass's six-step budget into the additional-evidence request.
+            task["agent_actions"] = []
+            task["loop_count"] = 0
+            task["search_count"] = 0
+            task["external_searches"] = 0
             task["decision"] = None
+            task["events"] = []
+            task["evidence"] = []
+            task["hybrid_results"] = []
+            task["context_pack"] = {"budget_tokens": 12000, "used_tokens": 0, "items": []}
             requested = [value for value in (evidence_dimensions or []) if value in {"inventory", "delivery", "demand", "cost"}]
             if requested:
                 task["missing_dimensions"] = requested

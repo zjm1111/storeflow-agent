@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # from the API process environment and are never sent to the browser.
     bailian_api_key: str = Field(default="", validation_alias=AliasChoices("BAILIAN_API_KEY", "DASHSCOPE_API_KEY"))
     bailian_base_url: str = Field(default="", validation_alias=AliasChoices("BAILIAN_BASE_URL", "DASHSCOPE_BASE_URL"))
-    bailian_model: str = "qwen-plus"
+    bailian_model: str = "qwen3.7-plus"
     bailian_timeout_seconds: int = 25
     # Optional local accounting rates. They default to zero because pricing
     # varies by model/region; a zero must be shown as "rate not configured",

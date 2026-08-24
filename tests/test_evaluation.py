@@ -30,6 +30,10 @@ def test_fault_injections_degrade_safely_and_leave_a_trace(monkeypatch):
             return [], [], ["search failed: controlled timeout", "parse failed: controlled PDF error", "source conflict skipped"]
 
     monkeypatch.setattr("app.agent.nodes.workflow.HybridRetriever", FailingRetriever)
+    monkeypatch.setattr(
+        "app.agent.nodes.workflow.get_settings",
+        lambda: type("Settings", (), {"tavily_api_key": "test-key", "tavily_cost_per_request_usd": 0.0})(),
+    )
     retrieval_state = initial_state("eval-fault", "[retrieval-error] courier disruption")
     retrieval_result = retrieve_sources(retrieval_state)
     assert "sources" not in retrieval_result

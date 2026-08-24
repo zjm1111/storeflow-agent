@@ -61,3 +61,7 @@ Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision
 内部资料向量与元数据由 Qdrant 承载；Redis 仅用于 URL 缓存和任务事件，不能作为长期业务事实来源。详细故障行为见 [Fallback Matrix](fallback-matrix.md)。
 
 `checkpoint.version` 与 `state_version` 是两条独立的版本线：前者描述 Agent 已持久化的执行位置，后者是 MySQL 任务快照的乐观锁版本。每次写入都以 `WHERE state_version = expected` compare-and-swap；旧 worker 或并发审核写入不会覆盖较新的完整 State，而是收到冲突并重新读取。
+
+## 异步测试约定
+
+生产 API 通过 Celery `run_task.apply_async()` 提交初始任务、恢复和审核补证；测试环境使用 `task_always_eager=True`，因此仍会经过相同 worker 入口但不会依赖 Redis broker。每个测试在导入应用前固定为 SQLite、无外部模型/网页 Key，并重建任务/记忆表，避免测试收集顺序、真实 MySQL 或后台任务时序影响结果。审核要求补证会重置**新一轮** Agent 的动作预算，同时保留不可变 trace 与 audit trail。
