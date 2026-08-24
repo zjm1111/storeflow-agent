@@ -1,4 +1,5 @@
-from app.agent.nodes.workflow import agent_decide_next_action, agent_execute_tool, retrieve_sources
+from app.agent.nodes.workflow import agent_decide_next_action, agent_execute_tool, agent_mark_action_running, agent_recover_action, retrieve_sources
+from app.agent.graph import _resume_route
 from app.agent.state import initial_state
 from app.services.decision import make_decision
 from app.services.retrieval import HybridRetriever, rrf_fuse_lanes
@@ -20,10 +21,62 @@ def test_agent_only_selects_read_only_whitelisted_tools(monkeypatch):
     state = initial_state("storeflow-agent", "暴雨期间门店饮料促销如何订货？")
     decision = agent_decide_next_action(state)
     assert decision["next_action"]["tool"] == "retrieve_evidence"
+    assert decision["active_action"]["status"] == "planned"
+    assert decision["active_action"]["action_id"] == decision["next_action"]["action_id"]
     state.update(decision)
+    running = agent_mark_action_running(state)
+    assert running["active_action"]["status"] == "running"
+    state.update(running)
     executed = agent_execute_tool(state)
     assert executed["agent_actions"][0]["tool"] == "retrieve_evidence"
+    assert executed["agent_actions"][0]["status"] == "completed"
+    assert executed["active_action"] is None
     assert executed["search_count"] == 1
+
+
+def test_interrupted_action_becomes_unknown_then_retries_with_same_action_id():
+    state = initial_state("recover-agent", "暴雨期间门店饮料促销如何订货？")
+    planned = agent_decide_next_action(state)
+    state.update(planned)
+    running = agent_mark_action_running(state)
+    action_id = running["active_action"]["action_id"]
+    state.update(running)
+    recovered = agent_recover_action(state)
+    assert recovered["active_action"]["status"] == "unknown"
+    assert recovered["active_action"]["action_id"] == action_id
+    state.update(recovered)
+    retried = agent_mark_action_running(state)
+    assert retried["active_action"]["status"] == "running"
+    assert retried["active_action"]["action_id"] == action_id
+    assert retried["active_action"]["attempts"] == 2
+
+
+def test_resume_route_uses_action_phase_not_only_checkpoint_node():
+    state = initial_state("resume-agent", "暴雨期间门店饮料促销如何订货？")
+    state.update(agent_decide_next_action(state))
+    assert _resume_route(state) == "agent_mark_action_running"
+    state.update(agent_mark_action_running(state))
+    assert _resume_route(state) == "agent_recover_action"
+    state.update(agent_recover_action(state))
+    assert _resume_route(state) == "agent_recover_action"
+    state["active_action"] = None
+    state["next_action"] = None
+    state["checkpoint"] = {"node": "agent_execute_tool", "version": 9}
+    assert _resume_route(state) == "agent_decide_next_action"
+
+
+def test_failed_tool_action_is_durable_and_does_not_remain_active(monkeypatch):
+    def broken(_state):
+        raise RuntimeError("controlled retrieval failure")
+    monkeypatch.setattr("app.agent.nodes.workflow.retrieve_sources", broken)
+    state = initial_state("failed-agent", "暴雨期间门店饮料促销如何订货？")
+    state.update(agent_decide_next_action(state))
+    state.update(agent_mark_action_running(state))
+    failed = agent_execute_tool(state)
+    assert failed["active_action"] is None
+    assert failed["next_action"] is None
+    assert failed["agent_actions"][0]["status"] == "failed"
+    assert "controlled retrieval failure" in failed["agent_actions"][0]["failure_reason"]
 
 
 def test_storeflow_decision_has_three_named_purchase_options():

@@ -42,6 +42,7 @@ class ResearchState(TypedDict, total=False):
     context_pack: dict
     agent_actions: list[dict]
     next_action: dict | None
+    active_action: dict | None
     external_searches: int
     agent_finished: bool
     model_decision_count: int
@@ -63,6 +64,7 @@ def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope
         "context_pack": {"budget_tokens": 12000, "used_tokens": 0, "items": []},
         "agent_actions": [],
         "next_action": None,
+        "active_action": None,
         "external_searches": 0,
         "agent_finished": False,
         "model_decision_count": 0,

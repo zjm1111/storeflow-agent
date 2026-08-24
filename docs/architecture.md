@@ -29,6 +29,18 @@ flowchart TD
   M -->|拒绝| O[审计结束]
 ```
 
+## 动作级恢复语义
+
+每个 Manager 选择的高层动作都先写入完整任务快照，再运行工具：
+
+```text
+planned → running → completed
+                  ├→ failed
+                  └→ worker interruption → unknown → retry with same action_id
+```
+
+动作记录包含稳定的 `action_id`、由 `task_id:action_id` 派生的幂等键、执行次数、开始/完成时间、Observation 和关联 Evidence ID。checkpoint 的 `node` 只表示最后成功持久化的执行阶段；恢复路由同时读取 `active_action.status`：`planned` 进入执行准备，`running/unknown` 先标记中断再以相同动作 ID 重试，`completed/failed` 回到 Manager。当前工具均为只读；这提供本地状态幂等和外部请求可审计的至少一次重试语义，而不宣称跨 Tavily/数据库的分布式 exactly-once。
+
 ## 高层白名单与停止规则
 
 Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision_analysis`、`request_human_review`、`finish`。`retrieve_evidence` 是唯一的证据采集入口：一次动作内部并行执行三路只读检索，再统一进行 RRF、重排、去重、元数据过滤、上下文压缩和 Evidence ID 绑定。因此不会出现“Agent 逐项查一次，固定流程再 Fan-out 一次”的重复链路。

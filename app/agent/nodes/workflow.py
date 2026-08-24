@@ -95,20 +95,50 @@ def _fallback_action(state: ResearchState) -> AgentAction:
     return AgentAction(tool="request_human_review", reason="决策草案已生成，提交采购负责人审核。")
 
 
+def _replace_action(actions: list[dict], action: dict) -> list[dict]:
+    """Replace one immutable action record without losing its audit position."""
+    return [action if item.get("action_id") == action.get("action_id") else item for item in actions]
+
+
+def _planned_action(state: ResearchState, action: AgentAction, extra: dict | None = None) -> dict:
+    """Persist intent before any tool can run.
+
+    ``action_id`` remains stable across a crash retry.  This gives read-only
+    tools an idempotency boundary even though an external provider cannot offer
+    a distributed exactly-once transaction with our MySQL snapshot.
+    """
+    action_id = f"act-{uuid4().hex[:12]}"
+    planned = {
+        "action_id": action_id,
+        "idempotency_key": f"{state['task_id']}:{action_id}",
+        "tool": action.tool,
+        "reason": action.reason,
+        "status": "planned",
+        "attempts": 0,
+        "planned_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return {
+        "next_action": {**action.model_dump(), "action_id": action_id},
+        "active_action": planned,
+        "agent_actions": [*state.get("agent_actions", []), planned],
+        **(extra or {}),
+    }
+
+
 def agent_decide_next_action(state: ResearchState) -> dict:
     """Ask the LLM for one validated, bounded next action; never save reasoning."""
     def worker():
         fallback = _fallback_action(state)
         if state.get("agent_finished"):
-            return {"next_action": AgentAction(tool="finish", reason="任务已进入受控收尾。").model_dump()}
+            return _planned_action(state, AgentAction(tool="finish", reason="任务已进入受控收尾。"))
         if len(state.get("agent_actions", [])) >= state.get("max_loop", 6):
             budget_action = "request_human_review" if state.get("decision") else "run_decision_analysis"
-            return {"next_action": AgentAction(tool=budget_action, reason="达到 Agent 步数预算，保留降级原因并进入受控决策或审核。").model_dump(), "stop_reason": "agent step budget exhausted"}
+            return _planned_action(state, AgentAction(tool=budget_action, reason="达到 Agent 步数预算，保留降级原因并进入受控决策或审核。"), {"stop_reason": "agent step budget exhausted"})
         client = BailianClient()
         if not client.settings.model_enabled:
-            return {"next_action": fallback.model_dump(), "__recovery_message": "agent tool-choice fallback: BaiLian model is not configured"}
+            return _planned_action(state, fallback, {"__recovery_message": "agent tool-choice fallback: BaiLian model is not configured"})
         if state.get("model_decision_count", 0) >= state.get("max_model_decisions", 2):
-            return {"next_action": fallback.model_dump(), "__recovery_message": "agent tool-choice budget exhausted; continuing with deterministic policy"}
+            return _planned_action(state, fallback, {"__recovery_message": "agent tool-choice budget exhausted; continuing with deterministic policy"})
         observation = {
             "scope": state.get("scope", {}), "question": state.get("question"),
             "actions": [{key: item.get(key) for key in ("tool", "status", "observation")} for item in state.get("agent_actions", [])],
@@ -130,50 +160,92 @@ def agent_decide_next_action(state: ResearchState) -> dict:
                 raise ValueError("cannot request review before a decision draft exists")
             if action.tool == "finish" and not state.get("decision"):
                 raise ValueError("cannot finish before a decision draft exists")
-            return {"next_action": action.model_dump(), "model_decision_count": state.get("model_decision_count", 0) + 1, **_model_record(state, metadata)}
+            return _planned_action(state, action, {"model_decision_count": state.get("model_decision_count", 0) + 1, **_model_record(state, metadata)})
         except (ModelCallError, ValidationError, ValueError) as exc:
-            return {"next_action": fallback.model_dump(), **_model_record(state, {**client.status(), "attempted": True, "success": False}), "__recovery_message": f"agent tool-choice fallback: {exc}"}
+            return _planned_action(state, fallback, {**_model_record(state, {**client.status(), "attempted": True, "success": False}), "__recovery_message": f"agent tool-choice fallback: {exc}"})
     return _with_trace(state, "agent_decide_next_action", worker)
+
+
+def agent_recover_action(state: ResearchState) -> dict:
+    """Turn an interrupted running action into an explicit unknown action."""
+    def worker():
+        active = state.get("active_action") or {}
+        if not active:
+            return {"__recovery_message": "action recovery requested without an active action; returning to manager"}
+        if active.get("status") == "running":
+            active = {**active, "status": "unknown", "recovery_count": active.get("recovery_count", 0) + 1, "recovered_at": datetime.now(timezone.utc).isoformat()}
+            return {"active_action": active, "agent_actions": _replace_action(state.get("agent_actions", []), active), "__recovery_message": f"action {active.get('action_id')} interrupted; retrying read-only tool with the same idempotency key"}
+        return {"active_action": active}
+    return _with_trace(state, "agent_recover_action", worker)
+
+
+def agent_mark_action_running(state: ResearchState) -> dict:
+    """Durably record the execution attempt before running a composite tool."""
+    def worker():
+        active = state.get("active_action") or {}
+        if not active:
+            raise ValueError("cannot execute without a planned action")
+        if active.get("status") not in {"planned", "unknown"}:
+            raise ValueError(f"cannot start action in status {active.get('status')}")
+        active = {**active, "status": "running", "attempts": int(active.get("attempts", 0)) + 1, "started_at": datetime.now(timezone.utc).isoformat()}
+        return {"active_action": active, "agent_actions": _replace_action(state.get("agent_actions", []), active)}
+    # The checkpoint name is intentionally a phase, not merely a graph node:
+    # it means an action attempt is durable and may need recovery.
+    return _with_trace(state, "agent_action_running", worker)
 
 
 def agent_execute_tool(state: ResearchState) -> dict:
     """Execute only whitelisted read-only research tools and retain observations."""
     def worker():
-        action = state.get("next_action") or {}
+        action = state.get("active_action") or state.get("next_action") or {}
         tool = action.get("tool")
-        if tool == "finish":
-            # A decision is never silently completed: finish becomes the durable
-            # HITL hand-off once a draft exists.
-            return {"review_requested": bool(state.get("decision")), "status": "completed", "agent_finished": True}
+        if not action.get("action_id"):
+            raise ValueError("cannot execute an action without action_id")
+        if action.get("status") != "running":
+            raise ValueError(f"cannot execute action in status {action.get('status')}")
         if tool not in _AGENT_TOOLS:
-            raise ValueError("agent selected an unapproved tool")
+            if tool != "finish":
+                raise ValueError("agent selected an unapproved tool")
         started = perf_counter()
         update: dict = {}
         observation = "no new result"
-        if tool == "retrieve_evidence":
-            retrieved = retrieve_sources(state)
-            parsed = parse_sources({**state, **retrieved})
-            scored = score_evidence({**state, **retrieved, **parsed})
-            update = {**retrieved, **parsed, **scored}
-            observation = f"{len(scored.get('context_pack', {}).get('items', []))} evidence selected; parallel lanes={','.join(scored.get('working_memory', {}).get('parallel_retrieval', {}).get('completed_lanes', []))}"
-        elif tool == "assess_evidence_gap":
-            coverage, missing = _source_coverage(state.get("sources", []))
-            conflicts = [item for item in state.get("evidence", []) if item.get("conflict_status") == "pending_review"]
-            update = {"coverage": coverage, "missing_dimensions": missing, "working_memory": {**state.get("working_memory", {}), "coverage_gaps": missing}}
-            observation = f"missing={','.join(missing) or 'none'}; unresolved_conflicts={len(conflicts)}"
-        elif tool == "run_decision_analysis":
-            events = extract_events(state)
-            report = generate_report({**state, **events})
-            decision = make_decision(report.get("events", events.get("events", [])), constraints=state.get("constraints", {}))
-            update = {**events, **report, "decision": decision, "status": "completed"}
-            observation = f"{len(update.get('events', []))} risk events; three risk-profile strategies analysed"
-        elif tool == "request_human_review":
-            update = {"review_requested": True, "status": "completed", "agent_finished": True}
-            observation = "decision draft submitted for durable human review"
+        try:
+            if tool == "finish":
+                # A decision is never silently completed: finish becomes the
+                # durable HITL hand-off once a draft exists.
+                update = {"review_requested": bool(state.get("decision")), "status": "completed", "agent_finished": True}
+                observation = "controlled finish submitted for durable human review"
+            elif tool == "retrieve_evidence":
+                retrieved = retrieve_sources(state)
+                parsed = parse_sources({**state, **retrieved})
+                scored = score_evidence({**state, **retrieved, **parsed})
+                update = {**retrieved, **parsed, **scored}
+                observation = f"{len(scored.get('context_pack', {}).get('items', []))} evidence selected; parallel lanes={','.join(scored.get('working_memory', {}).get('parallel_retrieval', {}).get('completed_lanes', []))}"
+            elif tool == "assess_evidence_gap":
+                coverage, missing = _source_coverage(state.get("sources", []))
+                conflicts = [item for item in state.get("evidence", []) if item.get("conflict_status") == "pending_review"]
+                update = {"coverage": coverage, "missing_dimensions": missing, "working_memory": {**state.get("working_memory", {}), "coverage_gaps": missing}}
+                observation = f"missing={','.join(missing) or 'none'}; unresolved_conflicts={len(conflicts)}"
+            elif tool == "run_decision_analysis":
+                events = extract_events(state)
+                report = generate_report({**state, **events})
+                decision = make_decision(report.get("events", events.get("events", [])), constraints=state.get("constraints", {}))
+                update = {**events, **report, "decision": decision, "status": "completed"}
+                observation = f"{len(update.get('events', []))} risk events; three risk-profile strategies analysed"
+            elif tool == "request_human_review":
+                update = {"review_requested": True, "status": "completed", "agent_finished": True}
+                observation = "decision draft submitted for durable human review"
+        except Exception as exc:
+            failed = {**action, "status": "failed", "failed_at": datetime.now(timezone.utc).isoformat(), "failure_reason": f"{type(exc).__name__}: {exc}"}
+            return {
+                "active_action": None, "next_action": None,
+                "agent_actions": _replace_action(state.get("agent_actions", []), failed),
+                "__recovery_message": f"action {action['action_id']} failed: {type(exc).__name__}",
+            }
         budget = {"remaining_steps": max(0, state.get("max_loop", 6) - len(state.get("agent_actions", [])) - 1), "remaining_external_searches": max(0, state.get("max_search", 2) - update.get("search_count", state.get("search_count", 0))), "remaining_token_budget": max(0, get_settings().context_token_budget - update.get("context_pack", state.get("context_pack", {})).get("used_tokens", 0)), "latency_ms": round((perf_counter() - started) * 1000, 1)}
         evidence_ids = update.get("working_memory", state.get("working_memory", {})).get("selected_evidence_ids", [])
-        history = [*state.get("agent_actions", []), {"tool": tool, "reason": action.get("reason"), "status": "completed", "observation": observation, "evidence_ids": evidence_ids, "budget": budget, "timestamp": datetime.now(timezone.utc).isoformat()}]
-        return {**update, "agent_actions": history}
+        completed = {**action, "status": "completed", "completed_at": datetime.now(timezone.utc).isoformat(), "observation": observation, "evidence_ids": evidence_ids, "budget": budget}
+        return {**update, "active_action": None, "next_action": None, "agent_actions": _replace_action(state.get("agent_actions", []), completed)}
     return _with_trace(state, "agent_execute_tool", worker)
 
 

@@ -193,7 +193,7 @@ def get_task(task_id: str, principal: Principal = Depends(get_current_principal)
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {"task_id": task["task_id"], "status": task["status"], "trace": task["trace"], "errors": task["errors"], "checkpoint": task.get("checkpoint"), "coverage": task.get("coverage"), "stop_reason": task.get("stop_reason")}
+    return {"task_id": task["task_id"], "status": task["status"], "trace": task["trace"], "errors": task["errors"], "checkpoint": task.get("checkpoint"), "active_action": task.get("active_action"), "coverage": task.get("coverage"), "stop_reason": task.get("stop_reason")}
 
 
 @router.get("/{task_id}/result")
@@ -201,7 +201,7 @@ def get_result(task_id: str, principal: Principal = Depends(get_current_principa
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {key: task.get(key) for key in ("task_id", "workspace_id", "scope", "status", "plan", "sources", "evidence", "events", "report", "hybrid_results", "context_pack", "working_memory", "situational_memories", "recalled_memories", "memory_conflicts", "memory_candidate", "agent_actions", "errors", "trace", "coverage", "missing_dimensions", "search_count", "max_search", "max_loop", "max_latency_seconds", "stop_reason", "checkpoint", "decision", "human_review", "audit_trail", "final_report", "model_execution", "dependency_execution", "token_usage", "estimated_cost_usd")}
+    return {key: task.get(key) for key in ("task_id", "workspace_id", "scope", "status", "plan", "sources", "evidence", "events", "report", "hybrid_results", "context_pack", "working_memory", "situational_memories", "recalled_memories", "memory_conflicts", "memory_candidate", "agent_actions", "active_action", "errors", "trace", "coverage", "missing_dimensions", "search_count", "max_search", "max_loop", "max_latency_seconds", "stop_reason", "checkpoint", "decision", "human_review", "audit_trail", "final_report", "model_execution", "dependency_execution", "token_usage", "estimated_cost_usd")}
 
 
 @router.get("/{task_id}/events")
