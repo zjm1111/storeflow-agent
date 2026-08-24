@@ -1,0 +1,43 @@
+{
+  "version": "storeflow-v2-frozen-simulated",
+  "query_variants": [
+    {"case_id": "delivery-01", "question": "浦东下暴雨且仓配 ETA 往后推，饮料到店要不要提前备货？"},
+    {"case_id": "delivery-07", "question": "中央仓出货口堵住、货可能明天才来，门店怎样防止断货？"},
+    {"case_id": "delivery-10", "question": "防汛导致配送路段积水，现货还能撑一天半，采购草案怎么写？"},
+    {"case_id": "inventory-02", "question": "盘亏三十箱但系统数没改，真实可卖库存不足时补货如何判断？"},
+    {"case_id": "inventory-05", "question": "总仓 ATP 不够分，低库存门店怎样避免卖空？"},
+    {"case_id": "inventory-11", "question": "库存被锁导致门店拿不到货，高保障补货是否还有意义？"},
+    {"case_id": "demand-01", "question": "买二送一上线后销量大概率抬升，饮料订货要加多少？"},
+    {"case_id": "demand-03", "question": "连续热天会不会让冷饮销量冲高，门店该怎样补？"},
+    {"case_id": "demand-09", "question": "附近公司临时要两百箱，日常货和团购需求该怎么一起算？"},
+    {"case_id": "cost-01", "question": "油费附加项涨了，服务优先的订法还划算吗？"},
+    {"case_id": "cost-05", "question": "临期报损变高时，多囤货的尾部成本要怎么评估？"},
+    {"case_id": "cost-09", "question": "供应商起订量提高、预算有限，单店补货会不会无解？"}
+  ],
+  "challenge_documents": [
+    {"doc_id": "challenge-cross-01", "kind": "cross_dimension_distractor", "case_id": "delivery-01", "dimension": "demand", "text": "模拟干扰资料：浦东门店上周会员券核销增加，但本周没有配送 ETA 或天气结论。"},
+    {"doc_id": "challenge-cross-02", "kind": "cross_dimension_distractor", "case_id": "delivery-07", "dimension": "cost", "text": "模拟干扰资料：中央仓办公区空调维修报价上涨，与装车月台和发货时效无关。"},
+    {"doc_id": "challenge-cross-03", "kind": "cross_dimension_distractor", "case_id": "delivery-10", "dimension": "inventory", "text": "模拟干扰资料：另一城市门店完成常规饮料盘点，库存充足，不代表浦东配送线路。"},
+    {"doc_id": "challenge-cross-04", "kind": "cross_dimension_distractor", "case_id": "inventory-02", "dimension": "demand", "text": "模拟干扰资料：下月新品试饮活动仍在审批，不能解释本次盘亏。"},
+    {"doc_id": "challenge-cross-05", "kind": "cross_dimension_distractor", "case_id": "inventory-05", "dimension": "cost", "text": "模拟干扰资料：总部更新年度采购预算口径，未说明中央仓 ATP 或门店可售量。"},
+    {"doc_id": "challenge-cross-06", "kind": "cross_dimension_distractor", "case_id": "inventory-11", "dimension": "delivery", "text": "模拟干扰资料：非本 SKU 的夜间配送窗口正常，不表示锁库库存可分配。"},
+    {"doc_id": "challenge-cross-07", "kind": "cross_dimension_distractor", "case_id": "demand-01", "dimension": "delivery", "text": "模拟干扰资料：上月货车准时率良好，不能替代当前买赠促销的需求证据。"},
+    {"doc_id": "challenge-cross-08", "kind": "cross_dimension_distractor", "case_id": "demand-03", "dimension": "cost", "text": "模拟干扰资料：冷链电费同比下降，未包含高温日销量变化。"},
+    {"doc_id": "challenge-cross-09", "kind": "cross_dimension_distractor", "case_id": "demand-09", "dimension": "inventory", "text": "模拟干扰资料：隔壁门店常规库存正常，不能覆盖本店临时企业团购。"},
+    {"doc_id": "challenge-cross-10", "kind": "cross_dimension_distractor", "case_id": "cost-01", "dimension": "demand", "text": "模拟干扰资料：上周饮料搜索量持平，未说明燃油附加费变化。"},
+    {"doc_id": "challenge-cross-11", "kind": "cross_dimension_distractor", "case_id": "cost-05", "dimension": "delivery", "text": "模拟干扰资料：配送司机排班充足，不能降低临期损耗。"},
+    {"doc_id": "challenge-cross-12", "kind": "cross_dimension_distractor", "case_id": "cost-09", "dimension": "inventory", "text": "模拟干扰资料：普通 SKU 库存有余，未说明供应商 MOQ 或本门店预算。"},
+    {"doc_id": "challenge-conflict-01", "kind": "conflicting_document", "case_id": "delivery-01", "dimension": "delivery", "text": "模拟冲突资料：旧版配送公告称浦东线路正常，发布时间早于本次暴雨预警，需人工裁决。"},
+    {"doc_id": "challenge-conflict-02", "kind": "conflicting_document", "case_id": "delivery-07", "dimension": "delivery", "text": "模拟冲突资料：凌晨月台看板显示短时无积压，与下午装车积压通知的时间窗口不同。"},
+    {"doc_id": "challenge-conflict-03", "kind": "conflicting_document", "case_id": "delivery-10", "dimension": "delivery", "text": "模拟冲突资料：历史防汛演练记录称线路可通行，不能直接覆盖当天道路受淹事实。"},
+    {"doc_id": "challenge-conflict-04", "kind": "conflicting_document", "case_id": "inventory-02", "dimension": "inventory", "text": "模拟冲突资料：盘点前系统快照显示库存充足，与实物盘亏结果冲突，需以新盘点复核。"},
+    {"doc_id": "challenge-conflict-05", "kind": "conflicting_document", "case_id": "inventory-05", "dimension": "inventory", "text": "模拟冲突资料：昨日 ATP 快照显示可分配库存充足，可能已过期。"},
+    {"doc_id": "challenge-conflict-06", "kind": "conflicting_document", "case_id": "inventory-11", "dimension": "inventory", "text": "模拟冲突资料：早班分货单称库存可用，与最新 WMS 锁库记录相矛盾。"},
+    {"doc_id": "challenge-conflict-07", "kind": "conflicting_document", "case_id": "demand-01", "dimension": "demand", "text": "模拟冲突资料：去年买赠活动销量未提升，活动机制与本期不同，不能直接替代本期促销计划。"},
+    {"doc_id": "challenge-conflict-08", "kind": "conflicting_document", "case_id": "demand-03", "dimension": "demand", "text": "模拟冲突资料：旧天气预报称气温平稳，与最新连续高温预报不一致。"},
+    {"doc_id": "challenge-conflict-09", "kind": "conflicting_document", "case_id": "demand-09", "dimension": "demand", "text": "模拟冲突资料：企业团购意向单尚未确认，与正式两百箱订单需区分。"},
+    {"doc_id": "challenge-conflict-10", "kind": "conflicting_document", "case_id": "cost-01", "dimension": "cost", "text": "模拟冲突资料：旧合同燃油附加费未变，与最新物流报价单存在版本冲突。"},
+    {"doc_id": "challenge-conflict-11", "kind": "conflicting_document", "case_id": "cost-05", "dimension": "cost", "text": "模拟冲突资料：上月临期损耗率较低，与本月损耗月报不可直接混用。"},
+    {"doc_id": "challenge-conflict-12", "kind": "conflicting_document", "case_id": "cost-09", "dimension": "cost", "text": "模拟冲突资料：旧版供应商 MOQ 条款较低，已被新条款替代。"}
+  ]
+}

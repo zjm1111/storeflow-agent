@@ -28,7 +28,7 @@ flowchart LR
 - 三种明确风险偏好的订货策略：成本优先、平衡型、服务优先；展示成本、服务水平、缺货概率、CVaR 与约束可行性。
 - LangGraph interrupt + MySQL checkpoint 的持久化 HITL；Celery + Redis Streams 的异步任务和可续传 SSE。
 - JWT/RBAC、SSRF 防护、JSON 日志、Prometheus 指标、Docker Compose。
-- 冻结模拟评测：48 个问题、96 条金标 Evidence、48 条干扰资料；以本地 BM25、哈希向量和 RRF+本地 rerank 的离线指标对比，详见 [评测集说明](docs/evaluation-dataset.md)。
+- 冻结模拟评测：48 个问题、96 条金标 Evidence、12 条同义问法、48 条无关干扰与 24 条跨维度/冲突资料（共 168 文档）；以本地 BM25、哈希向量和 RRF+本地 rerank 的离线指标对比，详见 [评测集说明](docs/evaluation-dataset.md)。
 
 ## 快速启动
 

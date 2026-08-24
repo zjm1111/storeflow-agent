@@ -6,10 +6,13 @@ import math
 from collections import Counter
 from pathlib import Path
 
+from app.core import get_settings
 from app.services.decision import make_decision
+from app.services.llm import BailianClient, ModelCallError
 from app.services.retrieval import _bm25_scores, _local_rerank_score, _tokens, _vector, rrf_fuse_lanes
 
 CASES_PATH = Path(__file__).resolve().parents[2] / "sample_data" / "evaluation_cases.json"
+CHALLENGES_PATH = Path(__file__).resolve().parents[2] / "sample_data" / "evaluation_challenges.json"
 
 
 def load_cases() -> list[dict]:
@@ -30,8 +33,24 @@ def load_cases() -> list[dict]:
     return checked_in
 
 
-def build_frozen_corpus(cases: list[dict]) -> list[dict]:
-    """Derive 96 gold passages and 48 stable distractors from checked-in labels."""
+def load_challenges() -> dict:
+    """Read checked-in paraphrases and adversarial non-gold documents."""
+    payload = json.loads(CHALLENGES_PATH.read_text(encoding="utf-8"))
+    variants, documents = payload.get("query_variants"), payload.get("challenge_documents")
+    if not isinstance(variants, list) or len(variants) != 12:
+        raise ValueError("evaluation_challenges.json must contain exactly 12 checked-in query variants")
+    if not isinstance(documents, list) or len(documents) != 24:
+        raise ValueError("evaluation_challenges.json must contain exactly 24 challenge documents")
+    if {item.get("kind") for item in documents} != {"cross_dimension_distractor", "conflicting_document"}:
+        raise ValueError("challenge documents must include cross-dimension and conflict categories")
+    if len({item.get("doc_id") for item in documents}) != len(documents):
+        raise ValueError("challenge document IDs must be unique")
+    return payload
+
+
+def build_frozen_corpus(cases: list[dict], challenges: dict | None = None) -> list[dict]:
+    """Derive gold passages plus checked-in distractor/conflict challenges."""
+    challenges = challenges or load_challenges()
     corpus: list[dict] = []
     for case in cases:
         for annotation in case["evidence_annotations"]:
@@ -41,9 +60,19 @@ def build_frozen_corpus(cases: list[dict]) -> list[dict]:
     topics = ("办公用品盘点", "员工排班", "门店照明维护", "收银设备保养")
     for index in range(48):
         corpus.append({"doc_id": f"sim-distractor-{index + 1:02d}", "case_id": None, "dimension": "distractor", "gold": False, "text": f"模拟无关资料：{topics[index % len(topics)]}，离线检索干扰项 {index + 1}。"})
-    if len(corpus) != 144:
-        raise AssertionError("frozen corpus must contain 96 gold passages and 48 distractors")
+    for item in challenges["challenge_documents"]:
+        corpus.append({"doc_id": item["doc_id"], "case_id": item.get("case_id"), "dimension": item.get("dimension", "challenge"), "gold": False, "kind": item["kind"], "text": item["text"]})
+    if len(corpus) != 168:
+        raise AssertionError("frozen corpus must contain 96 gold passages, 48 generic distractors and 24 challenge documents")
     return corpus
+
+
+def _evaluation_queries(cases: list[dict], challenges: dict) -> tuple[list[tuple[str, set[str], str]], list[tuple[str, set[str], str]]]:
+    gold_by_case = {case["id"]: {item["evidence_id"] for item in case["evidence_annotations"]} for case in cases}
+    dimensions = {case["id"]: case["dimension"] for case in cases}
+    primary = [(case["question"], gold_by_case[case["id"]], case["dimension"]) for case in cases]
+    variants = [(item["question"], gold_by_case[item["case_id"]], dimensions[item["case_id"]]) for item in challenges["query_variants"]]
+    return primary, variants
 
 
 def _rank_bm25(question: str, corpus: list[dict]) -> list[str]:
@@ -80,13 +109,83 @@ def _retrieval_metrics(rankings: list[tuple[list[str], set[str], str]]) -> dict:
 
 
 def run_retrieval_evaluation() -> dict:
-    cases, corpus = load_cases(), build_frozen_corpus(load_cases())
+    cases, challenges = load_cases(), load_challenges()
+    corpus = build_frozen_corpus(cases, challenges)
+    primary_queries, variant_queries = _evaluation_queries(cases, challenges)
     strategies = {"bm25": _rank_bm25, "hash_vector": _rank_vector, "rrf_local_rerank": _rank_hybrid}
     results = {}
     for name, ranker in strategies.items():
-        rankings = [(ranker(case["question"], corpus), {item["evidence_id"] for item in case["evidence_annotations"]}, case["dimension"]) for case in cases]
-        results[name] = _retrieval_metrics(rankings)
-    return {"method": "frozen simulated corpus; deterministic local BM25, hash vector, RRF and local rerank", "corpus": {"questions": 48, "gold_evidence": 96, "distractors": 48, "documents": 144}, "strategies": results}
+        rankings = [(ranker(question, corpus), gold, dimension) for question, gold, dimension in primary_queries]
+        variant_rankings = [(ranker(question, corpus), gold, dimension) for question, gold, dimension in variant_queries]
+        results[name] = {**_retrieval_metrics(rankings), "synonym_variants": _retrieval_metrics(variant_rankings)}
+    return {
+        "method": "frozen simulated corpus; deterministic local BM25, hash vector, Source RRF and local rerank",
+        "corpus": {"questions": 48, "synonym_variants": 12, "gold_evidence": 96, "generic_distractors": 48, "cross_dimension_distractors": 12, "conflicting_documents": 12, "documents": 168},
+        "strategies": results,
+    }
+
+
+def _dot(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right))
+
+
+def _embed_batched(client: BailianClient, texts: list[str], batch_size: int = 32) -> tuple[list[list[float]], list[dict]]:
+    vectors, metadata = [], []
+    for start in range(0, len(texts), batch_size):
+        result, item_metadata = client.embed_texts(texts[start:start + batch_size])
+        vectors.extend(result)
+        metadata.append(item_metadata)
+    return vectors, metadata
+
+
+def run_optional_bailian_retrieval_evaluation(max_queries: int | None = None) -> dict:
+    """Explicit, paid remote comparison; never called by the default endpoint.
+
+    It evaluates real BaiLian embeddings and, when a rerank endpoint is
+    configured, qwen3-rerank over the same frozen simulated corpus. Results
+    are clearly labelled as offline/simulated rather than enterprise metrics.
+    """
+    settings = get_settings()
+    if not settings.model_enabled:
+        return {"status": "skipped", "reason": "BAILIAN_API_KEY and BAILIAN_BASE_URL are required", "offline_only": True}
+    cases, challenges = load_cases(), load_challenges()
+    corpus = build_frozen_corpus(cases, challenges)
+    primary_queries, _ = _evaluation_queries(cases, challenges)
+    selected = primary_queries[:max_queries] if max_queries else primary_queries
+    client = BailianClient()
+    try:
+        document_vectors, embedding_metadata = _embed_batched(client, [item["text"] for item in corpus])
+        query_vectors, query_metadata = _embed_batched(client, [item[0] for item in selected])
+    except ModelCallError as exc:
+        return {"status": "degraded", "reason": str(exc), "offline_only": True}
+    doc_ids = [item["doc_id"] for item in corpus]
+    vector_rankings = []
+    rerank_rankings = []
+    rerank_failure = None
+    for (question, gold, dimension), query_vector in zip(selected, query_vectors):
+        ranked = [doc_id for _, doc_id in sorted(((_dot(query_vector, vector), doc_id) for vector, doc_id in zip(document_vectors, doc_ids)), reverse=True)]
+        vector_rankings.append((ranked, gold, dimension))
+        if not settings.bailian_rerank_base_url:
+            continue
+        try:
+            candidates = ranked[:settings.rag_candidate_limit]
+            response, _ = client.rerank(question, [next(item["text"] for item in corpus if item["doc_id"] == doc_id) for doc_id in candidates], settings.rag_final_limit)
+            reranked_ids = [candidates[item["index"]] for item in response if isinstance(item.get("index"), int) and 0 <= item["index"] < len(candidates)]
+            rerank_rankings.append((reranked_ids + [item for item in ranked if item not in reranked_ids], gold, dimension))
+        except ModelCallError as exc:
+            rerank_failure = str(exc)
+            break
+    strategies = {"bailian_embedding": _retrieval_metrics(vector_rankings)}
+    if rerank_rankings and not rerank_failure:
+        strategies["bailian_embedding_plus_qwen3_rerank"] = _retrieval_metrics(rerank_rankings)
+    return {
+        "status": "completed" if not rerank_failure else "degraded",
+        "method": "explicit paid remote evaluation on frozen simulated corpus; not an online enterprise metric",
+        "query_count": len(selected), "document_count": len(corpus),
+        "embedding_metadata": embedding_metadata + query_metadata,
+        "rerank_degradation": rerank_failure,
+        "strategies": strategies,
+    }
 
 
 def run_evaluation() -> dict:
