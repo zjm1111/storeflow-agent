@@ -64,4 +64,4 @@ Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision
 
 ## 异步测试约定
 
-生产 API 通过 Celery `run_task.apply_async()` 提交初始任务、恢复和审核补证；测试环境使用 `task_always_eager=True`，因此仍会经过相同 worker 入口但不会依赖 Redis broker。每个测试在导入应用前固定为 SQLite、无外部模型/网页 Key，并重建任务/记忆表，避免测试收集顺序、真实 MySQL 或后台任务时序影响结果。审核要求补证会重置**新一轮** Agent 的动作预算，同时保留不可变 trace 与 audit trail。
+生产 API 通过 Celery `run_task.apply_async()` 提交初始任务、恢复和审核补证；测试环境在 Celery 可用时使用 `task_always_eager=True`，否则直接调用同一个 `execute_task` worker 函数，因此不依赖 Redis broker。每个测试在导入应用前固定为 SQLite、无外部模型/网页 Key，并重建任务/记忆表，避免测试收集顺序、真实 MySQL 或后台任务时序影响结果。审核要求补证会重置**新一轮** Agent 的动作预算，同时保留不可变 trace 与 audit trail。

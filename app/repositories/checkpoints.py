@@ -24,6 +24,12 @@ class CheckpointRepository:
                     checkpoint_id=f"cp-{uuid4().hex[:16]}", workspace_id=workspace_id, task_id=task_id,
                     version=version, node=str(checkpoint.get("node", "unknown")), payload=state,
                 ))
+            elif int((existing.payload or {}).get("state_version", -1)) < int(state.get("state_version", -1)):
+                # Review transitions may update durable business state without
+                # advancing the graph-node checkpoint. Preserve the newest
+                # snapshot for crash inspection, never regress it.
+                existing.node = str(checkpoint.get("node", existing.node))
+                existing.payload = state
 
     def latest(self, task_id: str, workspace_id: str = "demo") -> dict | None:
         with SessionLocal() as session:
