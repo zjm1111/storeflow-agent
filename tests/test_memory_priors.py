@@ -48,3 +48,46 @@ def test_specific_memory_does_not_match_a_task_with_unknown_scope(monkeypatch):
 
     assert result["items"] == []
     assert result["retrieval"]["scope_mismatch_excluded"] == 1
+
+
+def test_replacement_candidate_keeps_previous_memory_until_approved(monkeypatch):
+    _memory_session(monkeypatch)
+    with memory_module.SessionLocal.begin() as session:
+        session.add(MemoryItemRecord(
+            memory_id="old", workspace_id="demo", status="approved", kind="risk_pattern",
+            content="暴雨黄色预警时提前一天补货", evidence_ids=["ev-old"],
+            scope={"region": "上海", "sku": "drink-001"}, confidence=0.8,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=10),
+        ))
+
+    service = MemoryService()
+    previous, candidate = service.supersede("old", "暴雨黄色预警时提前两天补货", "reviewer-a")
+
+    assert previous["status"] == "approved"
+    assert candidate["status"] == "candidate"
+    assert candidate["supersedes_id"] == "old"
+    assert [item["memory_id"] for item in service.retrieve_approved_priors("demo", {"region": "上海", "sku": "drink-001"})["items"]] == ["old"]
+
+    # Rejection/expiration of the candidate must not create a recall gap.
+    service.expire(candidate["memory_id"], "reviewer-b")
+    assert service.get("old")["status"] == "approved"
+    assert [item["memory_id"] for item in service.retrieve_approved_priors("demo", {"region": "上海", "sku": "drink-001"})["items"]] == ["old"]
+
+
+def test_approving_replacement_atomically_switches_memory_lineage(monkeypatch):
+    _memory_session(monkeypatch)
+    with memory_module.SessionLocal.begin() as session:
+        session.add(MemoryItemRecord(
+            memory_id="old", workspace_id="demo", status="approved", content="旧版配送规则",
+            evidence_ids=["ev-old"], scope={"region": "上海"}, confidence=0.8,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=10),
+        ))
+
+    service = MemoryService()
+    _, candidate = service.supersede("old", "新版配送规则", "reviewer-a")
+    approved = service.approve(candidate["memory_id"], "reviewer-b")
+
+    assert approved["status"] == "approved"
+    assert approved["superseded_memory_id"] == "old"
+    assert service.get("old")["status"] == "superseded"
+    assert [item["memory_id"] for item in service.retrieve_approved_priors("demo", {"region": "上海"})["items"]] == [candidate["memory_id"]]

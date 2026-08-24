@@ -146,7 +146,8 @@ RiskEvent → Evidence ID → source_id / URI / 原文片段 / offset
 
 ```text
 candidate → approved → expired
-          └→ superseded（生成替代 candidate）
+          └→ 创建替代 candidate（旧版仍保持 approved）
+                         └→ 替代候选批准时，事务原子切换：旧版 superseded / 新版 approved
 ```
 
 只能在**人工审核批准**后成为 `approved`，才可被后续任务按 `workspace_id + region/store/category/sku/channel` scope 过滤召回。网页、模型草稿、失败任务都不能直接写入它。

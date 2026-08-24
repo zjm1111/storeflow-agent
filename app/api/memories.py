@@ -29,4 +29,4 @@ def supersede(memory_id: str, request: MemoryAction, principal: Principal = Depe
     if not request.replacement_content: raise HTTPException(422, "replacement_content is required")
     result = service.supersede(memory_id, request.replacement_content, principal.subject, principal.workspace_id)
     if not result: raise HTTPException(404, "Memory not found")
-    return {"superseded": result[0], "candidate": result[1]}
+    return {"previous": result[0], "candidate": result[1], "replacement_switch": "pending_approval"}

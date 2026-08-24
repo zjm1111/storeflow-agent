@@ -102,13 +102,32 @@ class MemoryService:
 
     def approve(self, memory_id: str, reviewer: str, workspace_id: str = "demo") -> dict | None:
         with SessionLocal.begin() as session:
-            record = session.get(MemoryItemRecord, memory_id)
+            # A replacement approval changes two records.  Lock the candidate
+            # and its previous approved record in this transaction so two
+            # reviewers cannot create a split lineage.
+            record = session.scalar(select(MemoryItemRecord).where(
+                MemoryItemRecord.memory_id == memory_id,
+                MemoryItemRecord.workspace_id == workspace_id,
+            ).with_for_update())
             if record is None or record.workspace_id != workspace_id or record.status != "candidate":
                 return None
+            superseded_memory_id = None
+            if record.supersedes_id:
+                previous = session.scalar(select(MemoryItemRecord).where(
+                    MemoryItemRecord.memory_id == record.supersedes_id,
+                    MemoryItemRecord.workspace_id == workspace_id,
+                ).with_for_update())
+                # Do not approve a replacement against an already changed
+                # lineage.  The reviewer can create a new proposal from the
+                # current approved memory instead.
+                if previous is None or previous.status != "approved":
+                    return None
+                previous.status, previous.reviewed_by = "superseded", reviewer
+                superseded_memory_id = previous.memory_id
             record.status, record.reviewed_by = "approved", reviewer
             record.expires_at = datetime.now(timezone.utc) + timedelta(days=get_settings().memory_default_ttl_days)
             session.flush()
-            return self._dump(record)
+            return {**self._dump(record), "superseded_memory_id": superseded_memory_id}
 
     def expire(self, memory_id: str, reviewer: str, workspace_id: str = "demo") -> dict | None:
         with SessionLocal.begin() as session:
@@ -121,10 +140,15 @@ class MemoryService:
 
     def supersede(self, memory_id: str, replacement_content: str, reviewer: str, workspace_id: str = "demo") -> tuple[dict, dict] | None:
         with SessionLocal.begin() as session:
-            previous = session.get(MemoryItemRecord, memory_id)
-            if previous is None or previous.workspace_id != workspace_id:
+            previous = session.scalar(select(MemoryItemRecord).where(
+                MemoryItemRecord.memory_id == memory_id,
+                MemoryItemRecord.workspace_id == workspace_id,
+            ).with_for_update())
+            if previous is None or previous.status != "approved":
                 return None
-            previous.status, previous.reviewed_by = "superseded", reviewer
+            # Creating a replacement is only a proposal.  The old reviewed
+            # memory must remain recallable until the replacement is approved;
+            # otherwise a rejected candidate would create a memory gap.
             replacement = MemoryItemRecord(
                 memory_id=f"mem-{uuid4().hex[:12]}", workspace_id=workspace_id, status="candidate",
                 kind=previous.kind, content=replacement_content[:4000], evidence_ids=previous.evidence_ids,
