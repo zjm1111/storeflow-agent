@@ -59,6 +59,10 @@ class Source(BaseModel):
     char_start: int | None = Field(default=None, ge=0)
     char_end: int | None = Field(default=None, ge=0)
     retrieval_unit: str | None = None
+    parent_id: str | None = None
+    parent_content: str | None = None
+    parent_char_start: int | None = Field(default=None, ge=0)
+    parent_char_end: int | None = Field(default=None, ge=0)
 
 
 class EvidenceSnippet(BaseModel):
@@ -80,6 +84,10 @@ class EvidenceSnippet(BaseModel):
     consistency_score: float = Field(default=1.0, ge=0, le=1)
     conflict_group: str | None = None
     conflict_status: Literal["none", "pending_review"] = "none"
+    # The exact child quote remains the citation.  This optional, bounded
+    # parent window supplies surrounding procedural context to the model.
+    parent_id: str | None = None
+    context_quote: str | None = None
 
 
 class RiskEvent(BaseModel):

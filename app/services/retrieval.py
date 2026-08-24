@@ -20,7 +20,7 @@ from app.services.context import semantic_chunks
 from app.services.llm import BailianClient, ModelCallError
 
 COLLECTION = "supplymind_knowledge"
-CHUNK_COLLECTION_VERSION = "chunks_v1"
+CHUNK_COLLECTION_VERSION = "chunks_v2"
 
 
 def _tokens(value: str) -> list[str]: return re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]", value.lower())
@@ -423,38 +423,73 @@ class HybridRetriever:
         return self._knowledge_results(query, limit)
 
     @staticmethod
-    def _pdf_child_chunks(raw: bytes) -> list[dict]:
-        """Extract a PDF into independently retrievable, page-aware chunks.
+    def _coalesce_semantic_chunks(text: str, *, max_chars: int) -> list[dict]:
+        """Preserve paragraph boundaries while avoiding tiny retrieval units."""
+        raw_chunks = semantic_chunks(text, max_chars=max_chars)
+        grouped: list[dict] = []
+        start: int | None = None
+        end: int | None = None
+        for chunk in raw_chunks:
+            chunk_start, chunk_end = int(chunk["char_start"]), int(chunk["char_end"])
+            if start is None:
+                start, end = chunk_start, chunk_end
+                continue
+            if chunk_end - start <= max_chars:
+                end = chunk_end
+                continue
+            value = text[start:end]
+            leading = len(value) - len(value.lstrip())
+            trailing = len(value) - len(value.rstrip())
+            grouped.append({"content": value.strip(), "char_start": start + leading, "char_end": end - trailing})
+            start, end = chunk_start, chunk_end
+        if start is not None and end is not None:
+            value = text[start:end]
+            leading = len(value) - len(value.lstrip())
+            trailing = len(value) - len(value.rstrip())
+            grouped.append({"content": value.strip(), "char_start": start + leading, "char_end": end - trailing})
+        return [chunk for chunk in grouped if chunk["content"]]
 
-        This is the first step of the internal-RAG migration: BM25, vector
-        search, RRF and rerank all operate on these child-sized chunks.  Parent
-        expansion is intentionally deferred to the next migration so this
-        representation stays easy to audit.
+    @classmethod
+    def _pdf_parent_child_chunks(cls, raw: bytes) -> list[dict]:
+        """Create page-aware Parents and vector-searchable Children from a PDF.
+
+        Parents favour natural paragraph/heading boundaries and are kept near
+        1,000--1,800 tokens (about 6,000 mixed-language characters at most).
+        Children remain around 300--500 tokens and are the *only* Qdrant/BM25
+        retrieval units.  Parent text is payload metadata, not a vector point.
         """
         children: list[dict] = []
         document_offset = 0
+        parent_index = 0
         for page_number, page in enumerate(PdfReader(BytesIO(raw)).pages, start=1):
             page_text = (page.extract_text() or "").strip()
             if not page_text:
                 continue
-            # Around 1,400 characters is a practical 300--500-token starting
-            # range for mixed Chinese/English operating manuals.
-            for chunk in semantic_chunks(page_text, max_chars=1400):
-                content = chunk["content"].strip()
-                if content:
+            # A page is a good provenance boundary; long pages are coalesced
+            # by their paragraph structure before child segmentation.
+            for parent in cls._coalesce_semantic_chunks(page_text, max_chars=6000):
+                parent_content = parent["content"]
+                parent_start = document_offset + parent["char_start"]
+                parent_end = document_offset + parent["char_end"]
+                for child in cls._coalesce_semantic_chunks(parent_content, max_chars=1400):
                     children.append({
-                        "content": content,
+                        "content": child["content"],
                         "page_number": page_number,
-                        "char_start": document_offset + chunk["char_start"],
-                        "char_end": document_offset + chunk["char_end"],
+                        "char_start": parent_start + child["char_start"],
+                        "char_end": parent_start + child["char_end"],
+                        "parent_index": parent_index,
+                        "parent_content": parent_content,
+                        "parent_char_start": parent_start,
+                        "parent_char_end": parent_end,
                     })
+                parent_index += 1
             document_offset += len(page_text) + 1
         return children
 
     def ingest_pdf(self, filename: str, raw: bytes) -> dict:
         if not raw.startswith(b"%PDF"):
             raise ValueError("Uploaded file is not a PDF")
-        chunks = self._pdf_child_chunks(raw)
+        chunks = self._pdf_parent_child_chunks(raw)
         if not chunks:
             raise ValueError("No extractable text found in PDF")
         content_hash = hashlib.sha256(raw).hexdigest()
@@ -485,6 +520,7 @@ class HybridRetriever:
         points = []
         for index, (chunk, vector) in enumerate(zip(chunks, vectors)):
             source_id = f"{document_id}-chunk-{index:04d}"
+            parent_id = f"{document_id}-parent-{chunk['parent_index']:04d}"
             source = {
                 "source_id": source_id,
                 "document_id": document_id,
@@ -503,6 +539,10 @@ class HybridRetriever:
                 "char_start": chunk["char_start"],
                 "char_end": chunk["char_end"],
                 "retrieval_unit": "child_chunk",
+                "parent_id": parent_id,
+                "parent_content": chunk["parent_content"],
+                "parent_char_start": chunk["parent_char_start"],
+                "parent_char_end": chunk["parent_char_end"],
             }
             points.append({
                 "id": int(hashlib.sha1(source_id.encode()).hexdigest()[:12], 16),

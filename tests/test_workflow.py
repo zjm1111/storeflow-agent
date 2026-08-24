@@ -9,6 +9,7 @@ from app.agent.nodes.workflow import parse_sources, retrieve_sources
 from app.agent.state import initial_state
 from app.main import app
 from app.services import retrieval
+from app.services.context import build_context_pack
 from app.services.decision import make_decision
 
 
@@ -118,6 +119,8 @@ def test_retrieved_pdf_child_chunk_becomes_one_exact_evidence_snippet():
         "page_number": 3,
         "char_start": 2400,
         "char_end": 2468,
+        "parent_id": "upload-123-parent-0000",
+        "parent_content": "配送异常处理流程。若预计延迟超过 24 小时，门店应保留两天安全库存，并向区域采购负责人升级告警。后续需要确认中央仓可供量。",
     }]
     state["working_memory"] = {"source_rerank_ids": ["upload-123-chunk-0002"]}
     result = parse_sources(state)
@@ -128,6 +131,25 @@ def test_retrieved_pdf_child_chunk_becomes_one_exact_evidence_snippet():
     assert evidence["chunk_index"] == 2
     assert evidence["page_number"] == 3
     assert evidence["char_start"] == 2400
+    assert evidence["context_quote"] == state["sources"][0]["parent_content"]
+    pack = build_context_pack(result["evidence"])
+    assert pack["items"][0]["citation_quote"] == evidence["quote"]
+    assert pack["items"][0]["parent_expansion"] is True
+
+
+def test_pdf_parent_child_chunking_uses_children_for_retrieval_and_keeps_parent_metadata(monkeypatch):
+    page_text = "\n\n".join(f"配送异常第 {index} 段：暴雨导致中央仓延迟，门店需要确认安全库存和补货量。" * 12 for index in range(8))
+
+    class Reader:
+        pages = [type("Page", (), {"extract_text": lambda self: page_text})()]
+
+    monkeypatch.setattr(retrieval, "PdfReader", lambda _: Reader())
+    chunks = retrieval.HybridRetriever._pdf_parent_child_chunks(b"%PDF-1.7 parent child")
+    assert len(chunks) > 1
+    assert all(chunk["parent_content"] for chunk in chunks)
+    assert all(chunk["content"] in chunk["parent_content"] for chunk in chunks)
+    assert all(chunk["parent_char_start"] <= chunk["char_start"] < chunk["char_end"] <= chunk["parent_char_end"] for chunk in chunks)
+    assert len({chunk["parent_index"] for chunk in chunks}) >= 1
 
 
 def test_low_value_search_pages_are_not_accepted_as_risk_sources():

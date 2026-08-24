@@ -450,6 +450,23 @@ def replan(state: ResearchState) -> dict:
 
 
 def parse_sources(state: ResearchState) -> dict:
+    def parent_context_window(parent: str | None, child: str, *, max_chars: int = 1800) -> str | None:
+        """Return a bounded parent window centred on the matched child."""
+        if not parent:
+            return None
+        normalized_parent, normalized_child = parent.strip(), child.strip()
+        if len(normalized_parent) <= max_chars:
+            return normalized_parent
+        position = normalized_parent.find(normalized_child)
+        if position < 0:
+            return normalized_parent[:max_chars]
+        start = max(0, position - max_chars // 3)
+        end = min(len(normalized_parent), start + max_chars)
+        start = max(0, end - max_chars)
+        prefix = "…" if start else ""
+        suffix = "…" if end < len(normalized_parent) else ""
+        return f"{prefix}{normalized_parent[start:end]}{suffix}"
+
     def worker():
         evidence = []
         selected_source_ids = set(state.get("working_memory", {}).get("source_rerank_ids", []))
@@ -478,6 +495,8 @@ def parse_sources(state: ResearchState) -> dict:
                     freshness_score=0.9, overall_score=0.8, chunk_index=chunk_data.get("chunk_index", index),
                     document_id=source.document_id, page_number=chunk_data.get("page_number"),
                     char_start=chunk_data["char_start"], char_end=chunk_data["char_end"],
+                    parent_id=source.parent_id,
+                    context_quote=parent_context_window(source.parent_content, chunk),
                 ).model_dump(mode="json"))
         # Selection happens after scoring so a lower-quality early chunk cannot
         # consume the model's context budget.

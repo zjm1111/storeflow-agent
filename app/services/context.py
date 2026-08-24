@@ -25,10 +25,10 @@ def _token_estimate(value: str) -> int:
     return max(1, (len(value) + 3) // 4)
 
 
-def _compressed_excerpt(quote: str, evidence_id: str) -> str:
+def _compressed_excerpt(quote: str, evidence_id: str, *, max_chars: int = 480) -> str:
     """Extractive compression: its only claim is the quoted source, never a new fact."""
     normalized = re.sub(r"\s+", " ", quote).strip()
-    excerpt = normalized[:480]
+    excerpt = normalized[:max_chars]
     if len(normalized) > len(excerpt):
         excerpt += "…"
     return f"[证据: {evidence_id}] {excerpt}"
@@ -58,7 +58,12 @@ def build_context_pack(evidence: list[dict], *, budget_tokens: int | None = None
                 continue
             if diversity_mode == "source_and_event" and event_id and event_id in seen_events:
                 continue
-            summary = _compressed_excerpt(quote, evidence_id)
+            # Child text is the auditable factual citation.  For an internal
+            # parent-child document, a bounded window around that child may be
+            # included as *context*, never as a replacement citation.
+            context_quote = item.get("context_quote") or quote
+            is_parent_expansion = bool(item.get("parent_id") and item.get("context_quote"))
+            summary = _compressed_excerpt(context_quote, evidence_id, max_chars=1600 if is_parent_expansion else 480)
             cost = _token_estimate(summary)
             if used + cost > budget:
                 continue
@@ -67,12 +72,16 @@ def build_context_pack(evidence: list[dict], *, budget_tokens: int | None = None
                 "source_id": source_id,
                 "event_id": event_id,
                 "content": quote,
+                "context_content": context_quote,
+                "citation_quote": quote,
                 "summary": summary,
                 "token_estimate": cost,
                 "overall_score": item.get("overall_score", 0),
                 "page_number": item.get("page_number"),
                 "char_start": item.get("char_start"),
                 "char_end": item.get("char_end"),
+                "parent_id": item.get("parent_id"),
+                "parent_expansion": is_parent_expansion,
                 "untrusted": True,
             })
             selected_ids.add(evidence_id)
