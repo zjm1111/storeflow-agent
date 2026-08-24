@@ -31,12 +31,17 @@ def test_approved_scope_ttl_priors_are_ranked_and_explainable(monkeypatch):
 
     assert [item["memory_id"] for item in result["items"]] == ["exact", "broad"]
     assert result["items"][0]["match_reason"]["exact_scope_keys"] == ["region", "store", "sku"]
-    assert result["retrieval"] == {
-        "strategy": "approved_scope_ttl_top_k", "limit": 8,
-        "approved_candidates": 4, "scope_ttl_matches": 2,
-        "expired_excluded": 1, "scope_mismatch_excluded": 1,
-        "fact_boundary": "Historical priors cannot become current RiskEvent evidence or citations.",
-    }
+    retrieval = result["retrieval"]
+    assert retrieval["strategy"] == "approved_scope_ttl_catalog_then_load"
+    assert retrieval["catalog_limit"] == 5
+    assert retrieval["approved_candidates"] == 4
+    assert retrieval["scope_ttl_matches"] == 2
+    assert retrieval["catalog_selected"] == 2
+    assert retrieval["content_loaded"] == 2
+    assert retrieval["content_budget_excluded"] == 0
+    assert retrieval["expired_excluded"] == 1
+    assert retrieval["scope_mismatch_excluded"] == 1
+    assert retrieval["fact_boundary"] == "Historical priors cannot become current RiskEvent evidence or citations."
 
 
 def test_specific_memory_does_not_match_a_task_with_unknown_scope(monkeypatch):
@@ -91,3 +96,28 @@ def test_approving_replacement_atomically_switches_memory_lineage(monkeypatch):
     assert approved["superseded_memory_id"] == "old"
     assert service.get("old")["status"] == "superseded"
     assert [item["memory_id"] for item in service.retrieve_approved_priors("demo", {"region": "上海"})["items"]] == [candidate["memory_id"]]
+
+
+def test_memory_catalog_selects_before_loading_content_under_a_separate_budget(monkeypatch):
+    _memory_session(monkeypatch)
+    now = datetime.now(timezone.utc)
+    with memory_module.SessionLocal.begin() as session:
+        session.add_all([
+            MemoryItemRecord(memory_id="exact", workspace_id="demo", status="approved", kind="risk_pattern", summary="浦东饮料暴雨补货案例", content="A" * 160, scope={"region": "上海", "store": "浦东"}, confidence=0.8, expires_at=now + timedelta(days=5)),
+            MemoryItemRecord(memory_id="broad", workspace_id="demo", status="approved", kind="risk_pattern", summary="上海区域配送案例", content="B" * 160, scope={"region": "上海"}, confidence=0.7, expires_at=now + timedelta(days=5)),
+            MemoryItemRecord(memory_id="third", workspace_id="demo", status="approved", kind="risk_pattern", summary="不应进入目录的第三条", content="C" * 20, scope={"region": "上海"}, confidence=0.6, expires_at=now + timedelta(days=5)),
+        ])
+    monkeypatch.setattr(memory_module, "get_settings", lambda: type("Settings", (), {
+        "memory_catalog_limit": 2, "memory_context_token_budget": 20,
+    })())
+
+    result = MemoryService().retrieve_approved_priors("demo", {"region": "上海", "store": "浦东"})
+
+    assert result["retrieval"]["catalog_selected"] == 2
+    assert result["retrieval"]["content_loaded"] == 1
+    assert result["retrieval"]["content_budget_excluded"] == 1
+    assert result["retrieval"]["content_used_tokens"] <= 20
+    assert result["items"][0]["memory_id"] == "exact"
+    assert result["items"][0]["summary"] == "浦东饮料暴雨补货案例"
+    assert result["items"][0]["content_truncated"] is True
+    assert result["items"][0]["content"].endswith("…")

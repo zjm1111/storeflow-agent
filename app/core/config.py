@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     rag_final_limit: int = 8
     context_token_budget: int = 12000
     memory_default_ttl_days: int = 90
+    # Long-term memory is a historical prior, not primary evidence.  Keep a
+    # separate, much smaller budget so it cannot crowd out the Evidence Pack.
+    memory_catalog_limit: int = 5
+    memory_context_token_budget: int = 1600
     jwt_secret: str = ""
     jwt_issuer: str = "supplymind"
     jwt_audience: str = "supplymind-web"

@@ -6,7 +6,7 @@ StoreFlow 服务于连锁零售企业的区域采购负责人。在促销、天�
 
 ## 为什么不是普通 RAG
 
-StoreFlow 是受限自治 Agent：LangGraph 控制“选择下一步 → 调用白名单复合工具 → Observation → 再规划”的循环。Manager 只可选择取证、评估证据缺口、决策分析、提交审核或结束；一次取证工具内部并行完成内部资料、公开风险和已批准记忆的采集，再统一 RRF、重排与压缩。Agent 最多 6 步、最多 2 次检索；模型只返回结构化工具动作，不保存自由式思维链。关键订货量由固定种子 Monte Carlo 与 OR-Tools 计算，决策草案会自动进入人工审核。
+StoreFlow 是受限自治 Agent：LangGraph 控制“选择下一步 → 调用白名单复合工具 → Observation → 再规划”的循环。Manager 只可选择取证、评估证据缺口、决策分析、提交审核或结束；一次取证工具内部并行采集内部资料、公开风险和已批准记忆，其中当前 Source 经 RRF、重排与压缩形成证据，Memory 则经 scope/TTL catalog 选择后作为受预算限制的历史 Prior。Agent 最多 6 步、最多 2 次检索；模型只返回结构化工具动作，不保存自由式思维链。关键订货量由固定种子 Monte Carlo 与 OR-Tools 计算，决策草案会自动进入人工审核。
 
 ```mermaid
 flowchart LR
@@ -24,7 +24,7 @@ flowchart LR
 
 - 内部长 PDF 使用 Parent–Child 分块：约 300–500 token 的 Child 完成 BM25/向量、RRF 与重排序；命中后按 `parent_id` 回溯受预算限制的 Parent 上下文。Tavily/网页按约 300–500 token 的临时 Chunk 进行 BM25/向量、RRF 与重排序，不写入内部知识库。Evidence 始终引用精确 Chunk，并保留页码或字符偏移。已批准记忆保持独立的历史 Prior 边界。
 - Evidence ID 约束的风险事件；冲突来源保持待裁决，不自动变成事实。
-- 工作记忆、情景任务快照与仅审核后可复用的长期业务记忆。
+- 工作记忆、情景任务快照与仅审核后可复用的长期业务记忆；长期记忆先选择轻量 summary catalog，再受独立 token 预算加载少量正文，替代版本只在新候选批准时原子切换。
 - 三种明确风险偏好的订货策略：成本优先、平衡型、服务优先；展示成本、服务水平、缺货概率、CVaR 与约束可行性。
 - LangGraph interrupt + MySQL checkpoint 的持久化 HITL；Celery + Redis Streams 的异步任务和可续传 SSE。
 - JWT/RBAC、SSRF 防护、JSON 日志、Prometheus 指标、Docker Compose。

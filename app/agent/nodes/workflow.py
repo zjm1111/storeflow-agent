@@ -399,7 +399,7 @@ def retrieve_sources(state: ResearchState) -> dict:
         historical_prior = {
             "kind": "approved_memory_prior",
             "count": len(memories),
-            "items": [{key: item.get(key) for key in ("memory_id", "content", "scope", "confidence", "expires_at", "evidence_ids", "prior_rank_score", "match_reason")} for item in memories],
+            "items": [{key: item.get(key) for key in ("memory_id", "kind", "summary", "content", "content_loaded", "content_truncated", "content_token_estimate", "scope", "confidence", "expires_at", "evidence_ids", "prior_rank_score", "match_reason")} for item in memories],
             "retrieval": telemetry.get("memory_prior", {}),
             "fact_boundary": "Historical memory is a reviewed prior, not current RiskEvent evidence or a citation source.",
         }

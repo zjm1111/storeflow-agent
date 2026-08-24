@@ -152,6 +152,8 @@ candidate → approved → expired
 
 只能在**人工审核批准**后成为 `approved`，才可被后续任务按 `workspace_id + region/store/category/sku/channel` scope 过滤召回。网页、模型草稿、失败任务都不能直接写入它。
 
+召回采用两阶段而不是将全部记忆正文塞入任务状态：先读取 `memory_id / kind / summary / scope / confidence / TTL` 的轻量 catalog，按 scope、审核置信度与新鲜度选择最多 5 条；再以单独的 1600-token 默认预算加载正文。它只作为历史 Prior，不占用当前 Evidence 的事实引用边界。
+
 若历史记忆和当天配送/天气/促销证据冲突，界面显示待复核；新证据不会被旧记忆自动覆盖。
 
 源码：[app/services/memory.py](../app/services/memory.py)、[app/repositories/tasks.py](../app/repositories/tasks.py)。
