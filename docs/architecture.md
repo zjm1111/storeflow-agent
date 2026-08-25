@@ -53,6 +53,8 @@ Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision
 
 长期记忆还保存 `origin_task_id`、`reviewed_at`、内容哈希、`revision`、`possible_duplicate_of` 与 `conflicts_with`。创建候选时，仅在同 workspace、同 scope、同 kind 的候选/已批准记忆中用确定性内容哈希、词项重叠和显式相反规则生成**审核提示**；系统绝不自动合并、重写、过期或覆盖已有记忆。replacement candidate 继承来源任务并递增 revision，最终仍由审核人决定是否完成原子替换。
 
+决策批准后由确定性 `MemoryCandidateExtractor` 形成候选，而不再拼接 RiskEvent 原文：它要求已批准策略、至少一个合法业务 scope，以及每个保留风险事件的已验证 Evidence ID；工具日志、失败信息、原始临时库存/时间数值不会复制到长期记忆正文。当前阶段每个任务最多产出一条 `episodic` 候选，正文仅表达“风险模式 + 已批准策略 + 必须重新核验当期证据”的历史先验；候选提取被拒绝时会持久化原因，但不影响已批准的当前任务决策。
+
 当库存、需求、到货、成本四维均有证据且没有未裁决关键冲突时，进入决策；否则在最多 6 步、最多 2 次检索、上下文 token 与延迟预算内补证。预算耗尽仍会生成带降级原因的建议草案，并自动交给人工审核，不会自动下单。
 
 ## 状态与持久化归属

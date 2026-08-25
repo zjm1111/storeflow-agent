@@ -7,6 +7,7 @@ from app.repositories import StateConflictError, TaskRepository
 from app.services.events import TaskEventBroker
 from app.services.llm import BailianClient, ModelCallError
 from app.services.memory import MemoryService
+from app.services.memory_candidates import MemoryCandidateExtractor
 from app.repositories.checkpoints import CheckpointRepository
 from app.agent.review_graph import build_review_graph
 from langgraph.types import Command
@@ -172,17 +173,16 @@ class ResearchService:
                     task.setdefault("model_execution", []).append({**client.status(), "attempted": True, "success": False})
                     task.setdefault("errors", []).append(f"approved final report: model fallback: {exc}")
             task["final_report"] = {"markdown": final_markdown, "decision": decision}
-            # This is intentionally a candidate: approval is the only path that can
-            # make it reusable in a later task.
-            approved_events = task.get("events", [])
-            if approved_events:
+            # Candidate formation is a separate, deterministic safety boundary:
+            # raw RiskEvent summaries never become cross-task memory verbatim.
+            extraction = MemoryCandidateExtractor().extract(task)
+            task["memory_candidate_extraction"] = extraction["validation"]
+            proposed = extraction["candidate"]
+            if proposed:
                 task["memory_candidate"] = MemoryService().create_candidate(
                     workspace_id=task.get("workspace_id", "demo"),
-                    content="; ".join(event.get("summary", "") for event in approved_events),
-                    evidence_ids=sorted({eid for event in approved_events for eid in event.get("evidence_ids", [])}),
-                    scope=task.get("scope", {}),
-                    confidence=min(event.get("confidence", 0.5) for event in approved_events),
-                    kind="episodic",
+                    content=proposed["content"], evidence_ids=proposed["evidence_ids"],
+                    scope=proposed["scope"], confidence=proposed["confidence"], kind=proposed["kind"],
                     origin_task_id=task_id,
                 )
             self._audit(task, action, comment, None, "approved")

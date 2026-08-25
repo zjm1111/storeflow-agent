@@ -126,7 +126,7 @@ def get_task_memory(task_id: str, principal: Principal = Depends(get_current_pri
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {"task_id": task_id, "working_memory": task.get("working_memory", {}), "historical_prior": task.get("working_memory", {}).get("historical_prior", {}), "situational_memories": task.get("situational_memories", []), "recalled_memories": task.get("recalled_memories", []), "memory_conflicts": task.get("memory_conflicts", []), "candidate": task.get("memory_candidate")}
+    return {"task_id": task_id, "working_memory": task.get("working_memory", {}), "historical_prior": task.get("working_memory", {}).get("historical_prior", {}), "situational_memories": task.get("situational_memories", []), "recalled_memories": task.get("recalled_memories", []), "memory_conflicts": task.get("memory_conflicts", []), "candidate": task.get("memory_candidate"), "candidate_extraction": task.get("memory_candidate_extraction")}
 
 
 def _schedule_research(task: dict, workspace_id: str, background_tasks: BackgroundTasks) -> None:
@@ -156,7 +156,7 @@ def _review_action(task_id: str, action: str, request: ReviewRequest, principal:
         raise HTTPException(status_code=409, detail="Review action requires a task awaiting_review")
     if action == "need_more_evidence" and background_tasks is not None:
         _schedule_research(task, principal.workspace_id, background_tasks)
-    return {key: task.get(key) for key in ("task_id", "status", "human_review", "audit_trail", "decision", "final_report", "memory_candidate")}
+    return {key: task.get(key) for key in ("task_id", "status", "human_review", "audit_trail", "decision", "final_report", "memory_candidate", "memory_candidate_extraction")}
 
 
 @router.post("/{task_id}/review/approve")
@@ -208,7 +208,7 @@ def get_result(task_id: str, principal: Principal = Depends(get_current_principa
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {key: task.get(key) for key in ("task_id", "workspace_id", "scope", "status", "state_version", "plan", "sources", "evidence", "events", "report", "hybrid_results", "context_pack", "working_memory", "situational_memories", "recalled_memories", "memory_conflicts", "memory_candidate", "agent_actions", "active_action", "errors", "trace", "coverage", "missing_dimensions", "search_count", "max_search", "max_loop", "max_latency_seconds", "stop_reason", "checkpoint", "decision", "human_review", "audit_trail", "final_report", "model_execution", "dependency_execution", "token_usage", "estimated_cost_usd")}
+    return {key: task.get(key) for key in ("task_id", "workspace_id", "scope", "status", "state_version", "plan", "sources", "evidence", "events", "report", "hybrid_results", "context_pack", "working_memory", "situational_memories", "recalled_memories", "memory_conflicts", "memory_candidate", "memory_candidate_extraction", "agent_actions", "active_action", "errors", "trace", "coverage", "missing_dimensions", "search_count", "max_search", "max_loop", "max_latency_seconds", "stop_reason", "checkpoint", "decision", "human_review", "audit_trail", "final_report", "model_execution", "dependency_execution", "token_usage", "estimated_cost_usd")}
 
 
 @router.get("/{task_id}/events")

@@ -40,6 +40,7 @@ class ResearchState(TypedDict, total=False):
     recalled_memories: list[dict]
     situational_memories: list[dict]
     memory_conflicts: list[dict]
+    memory_candidate_extraction: dict
     context_pack: dict
     agent_actions: list[dict]
     next_action: dict | None
