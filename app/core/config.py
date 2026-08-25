@@ -45,7 +45,15 @@ class Settings(BaseSettings):
     rerank_provider: str = "local"
     rag_candidate_limit: int = 30
     rag_final_limit: int = 8
+    # Context policy is intentionally partitioned before a model call. The
+    # legacy context_token_budget remains as a compatibility ceiling only;
+    # new code uses model/evidence/working/output budgets below.
     context_token_budget: int = 12000
+    model_context_token_budget: int = 14000
+    system_context_token_budget: int = 900
+    working_state_context_token_budget: int = 1000
+    evidence_context_token_budget: int = 8000
+    model_output_reserve_tokens: int = 1500
     memory_default_ttl_days: int = 90
     memory_episodic_ttl_days: int = 30
     memory_semantic_ttl_days: int = 180

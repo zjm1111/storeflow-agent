@@ -9,7 +9,7 @@ from app.agent.nodes.workflow import parse_sources, retrieve_sources
 from app.agent.state import initial_state
 from app.main import app
 from app.services import retrieval
-from app.services.context import build_context_pack
+from app.services.context import build_evidence_context_pack
 from app.services.decision import make_decision
 
 
@@ -132,7 +132,7 @@ def test_retrieved_pdf_child_chunk_becomes_one_exact_evidence_snippet():
     assert evidence["page_number"] == 3
     assert evidence["char_start"] == 2400
     assert evidence["context_quote"] == state["sources"][0]["parent_content"]
-    pack = build_context_pack(result["evidence"])
+    pack = build_evidence_context_pack(result["evidence"])
     assert pack["items"][0]["citation_quote"] == evidence["quote"]
     assert pack["items"][0]["parent_expansion"] is True
 

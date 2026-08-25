@@ -118,7 +118,8 @@ def get_task_evidence(task_id: str, principal: Principal = Depends(get_current_p
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {"task_id": task_id, "context_pack": task.get("context_pack"), "evidence": task.get("evidence", []), "sources": task.get("sources", []), "conflicts": [item for item in task.get("evidence", []) if item.get("conflict_status") == "pending_review"]}
+    evidence_context_pack = task.get("evidence_context_pack") or task.get("context_pack")
+    return {"task_id": task_id, "evidence_context_pack": evidence_context_pack, "context_pack": evidence_context_pack, "deprecated_fields": ["context_pack"], "evidence": task.get("evidence", []), "sources": task.get("sources", []), "conflicts": [item for item in task.get("evidence", []) if item.get("conflict_status") == "pending_review"]}
 
 
 @router.get("/{task_id}/memory")
@@ -215,7 +216,10 @@ def get_result(task_id: str, principal: Principal = Depends(get_current_principa
     task = service.get(task_id, principal.workspace_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return {key: task.get(key) for key in ("task_id", "workspace_id", "scope", "status", "state_version", "plan", "sources", "evidence", "events", "report", "hybrid_results", "context_pack", "working_memory", "situational_memories", "recalled_memories", "memory_conflicts", "memory_candidate", "memory_candidates", "memory_candidate_extraction", "agent_actions", "active_action", "errors", "trace", "coverage", "missing_dimensions", "search_count", "max_search", "max_loop", "max_latency_seconds", "stop_reason", "checkpoint", "decision", "human_review", "audit_trail", "final_report", "model_execution", "dependency_execution", "token_usage", "estimated_cost_usd")}
+    result = {key: task.get(key) for key in ("task_id", "workspace_id", "scope", "status", "state_version", "plan", "sources", "evidence", "events", "report", "hybrid_results", "evidence_context_pack", "context_pack", "working_memory", "situational_memories", "recalled_memories", "memory_conflicts", "memory_candidate", "memory_candidates", "memory_candidate_extraction", "agent_actions", "active_action", "errors", "trace", "coverage", "missing_dimensions", "search_count", "max_search", "max_loop", "max_latency_seconds", "stop_reason", "checkpoint", "decision", "human_review", "audit_trail", "final_report", "model_execution", "dependency_execution", "context_telemetry", "token_usage", "estimated_cost_usd")}
+    result["evidence_context_pack"] = result.get("evidence_context_pack") or result.get("context_pack")
+    result["deprecated_fields"] = ["context_pack"]
+    return result
 
 
 @router.get("/{task_id}/events")

@@ -1,5 +1,7 @@
 from typing import TypedDict
 
+from app.services.context import context_budget_policy
+
 
 class ResearchState(TypedDict, total=False):
     task_id: str
@@ -43,6 +45,7 @@ class ResearchState(TypedDict, total=False):
     memory_candidate_extraction: dict
     memory_candidates: list[dict]
     context_pack: dict
+    evidence_context_pack: dict
     agent_actions: list[dict]
     next_action: dict | None
     active_action: dict | None
@@ -52,9 +55,11 @@ class ResearchState(TypedDict, total=False):
     max_model_decisions: int
     review_requested: bool
     graph_execution: dict
+    context_telemetry: list[dict]
 
 
 def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope: dict | None = None, constraints: dict | None = None, idempotency_key: str | None = None) -> ResearchState:
+    evidence_budget = context_budget_policy()["evidence_budget"]
     return {
         "task_id": task_id,
         "state_version": 0,
@@ -66,7 +71,10 @@ def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope
         "recalled_memories": [],
         "situational_memories": [],
         "memory_conflicts": [],
-        "context_pack": {"budget_tokens": 12000, "used_tokens": 0, "items": []},
+        # ``context_pack`` is a deprecated API compatibility alias. Only the
+        # explicitly named evidence pack is current factual model context.
+        "evidence_context_pack": {"kind": "current_evidence", "budget_tokens": evidence_budget, "used_tokens": 0, "items": []},
+        "context_pack": {"kind": "current_evidence", "budget_tokens": evidence_budget, "used_tokens": 0, "items": []},
         "agent_actions": [],
         "next_action": None,
         "active_action": None,
@@ -78,6 +86,7 @@ def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope
         # Populated by ResearchService. LangGraph owns graph recovery using
         # this run id and the task-id thread; this is only a task projection.
         "graph_execution": {},
+        "context_telemetry": [],
         "question": question,
         "plan": None,
         "sources": [],

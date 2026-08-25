@@ -1,6 +1,7 @@
-from app.agent.nodes.workflow import agent_decide_next_action, agent_execute_tool, agent_mark_action_running, agent_recover_action, retrieve_sources
+from app.agent.nodes.workflow import agent_decide_next_action, agent_execute_tool, agent_mark_action_running, agent_recover_action, extract_events, generate_report, retrieve_sources
 from app.agent.graph import _resume_route
 from app.agent.state import initial_state
+from app.services.context import build_controller_context, build_report_context, build_risk_context
 from app.services.decision import make_decision
 from app.services.retrieval import HybridRetriever, rrf_fuse_lanes
 
@@ -122,6 +123,53 @@ def test_agent_accepts_a_structured_model_tool_choice(monkeypatch):
     result = agent_decide_next_action(state)
     assert result["next_action"]["tool"] == "retrieve_evidence"
     assert result["token_usage"] == 12
+    assert result["context_telemetry"][-1]["call"] == "controller"
+    assert result["context_telemetry"][-1]["mode"] == "remote"
+
+
+def test_risk_and_report_models_only_receive_compressed_evidence_context(monkeypatch):
+    raw_marker = "RAW_ORIGINAL_QUOTE_MUST_NOT_ENTER_MODEL_CONTEXT"
+    prompts = []
+
+    class Client:
+        class settings:
+            model_enabled = True
+            model_enrichment_enabled = True
+
+        def status(self): return {"provider": "test", "enabled": True}
+
+        def complete_json(self, **kwargs):
+            prompts.append(kwargs["user"])
+            if "REPORT_CONTEXT" in kwargs["user"]:
+                return {"markdown": "## 报告\n[证据: ev-context]", "citation_evidence_ids": ["ev-context"]}, {"total_tokens": 4}
+            return {"events": [{"event_type": "logistics_delay", "summary": "配送风险", "affected_entity": "浦东门店", "confidence": 0.6, "evidence_ids": ["ev-context"], "source_ids": ["source-context"], "severity": "high"}]}, {"total_tokens": 4}
+
+    monkeypatch.setattr("app.agent.nodes.workflow.BailianClient", Client)
+    state = initial_state("context-model", "暴雨期间门店如何订货？", scope={"store": "浦东门店"})
+    state["evidence"] = [{"evidence_id": "ev-context", "source_id": "source-context", "source_type": "fixture", "quote": raw_marker, "relevance_score": 0.9, "authority_score": 0.9, "freshness_score": 0.9, "overall_score": 0.9, "chunk_index": 0, "conflict_status": "none"}]
+    state["sources"] = [{"source_id": "source-context", "title": "配送通知", "url": "https://example.com/context"}]
+    state["evidence_context_pack"] = {"kind": "current_evidence", "items": [{"evidence_id": "ev-context", "source_id": "source-context", "summary": "[证据: ev-context] 暴雨导致配送延迟", "page_number": 1, "char_start": 0, "char_end": 20}]}
+    events = extract_events(state)
+    state.update(events)
+    generate_report(state)
+    assert len(prompts) == 2
+    assert "RISK_CONTEXT" in prompts[0]
+    assert "REPORT_CONTEXT" in prompts[1]
+    assert all(raw_marker not in prompt for prompt in prompts)
+
+
+def test_context_projections_isolate_historical_prior_from_current_evidence():
+    state = initial_state("projection", "门店暴雨补货", scope={"store": "浦东门店"})
+    state["evidence_context_pack"] = {"items": [{"evidence_id": "ev-1", "source_id": "s-1", "summary": "[证据: ev-1] 暴雨导致配送延迟"}]}
+    state["recalled_memories"] = [{"memory_id": "mem-1", "kind": "episodic", "summary": "历史暴雨案例", "content": "历史经验只用于提示复核", "scope": {"store": "浦东门店"}, "confidence": 0.8, "evidence_ids": ["old-ev"]}]
+    controller = build_controller_context(state)
+    risk = build_risk_context(state)
+    report = build_report_context(state, risk_events=[])
+    assert controller["historical_prior"]["items"][0]["label"] == "HISTORICAL_PRIOR_NOT_CURRENT_EVIDENCE"
+    assert controller["current_evidence_status"]["label"] == "CURRENT_EVIDENCE"
+    assert risk["historical_prior"]["included"] is False
+    assert report["historical_prior"]["included"] is False
+    assert all(item["label"] == "CURRENT_EVIDENCE" for item in risk["current_evidence"])
 
 
 def test_rrf_tracks_source_lanes_only():

@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.core import get_settings
 from app.repositories.database import SessionLocal
 from app.repositories.models import MemoryItemRecord
+from app.services.context import estimate_tokens, truncate_to_token_budget
 
 
 class MemoryService:
@@ -136,7 +137,7 @@ class MemoryService:
                 # Character slicing is only a budget guard.  The summary is
                 # still present, and the full reviewed record remains available
                 # to a reviewer through the memory API.
-                content = full_content[:max(1, remaining * 4 - 1)].rstrip() + "…"
+                content = truncate_to_token_budget(full_content, remaining)
             else:
                 content = full_content
             actual_cost = self._token_estimate(content)
@@ -350,7 +351,8 @@ class MemoryService:
 
     @staticmethod
     def _token_estimate(content: str) -> int:
-        return max(1, (len(content) + 3) // 4)
+        """Compatibility method delegating to the shared context estimator."""
+        return estimate_tokens(content)
 
     @classmethod
     def _validate_candidate_kind(cls, kind: str, *, human_initiated: bool) -> None:

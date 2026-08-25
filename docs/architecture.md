@@ -2,6 +2,16 @@
 
 StoreFlow 是单 Manager、受限 ReAct Agent。LLM 不直接检索、计算订货量或修改业务系统；它只从高层动作中选择下一步，动作由确定性复合工具执行并返回受控 Observation。
 
+## Context Management 命名边界
+
+`evidence_context_pack` 是当前事实证据的唯一压缩上下文包：它只包含带 Evidence ID 的、可回溯的当前来源摘录，不包含 Historical Prior、完整 `ResearchState` 或模型输出。`context_pack` 在一个兼容版本内保留为同一对象的旧 API 别名。所有预模型预算统一使用保守的 `estimate_tokens()`：对中英文、数字与标点分别估算，目的是 hard budget 安全余量而非供应商账单统计；真实模型 usage 仍由 provider 返回值记录。
+
+单次模型请求采用固定预算策略，而不是让 Evidence 吃满窗口：默认总窗口为 14k token，预留 system/instruction 900、working state 1k、Historical Prior 1.6k、输出 1.5k；Evidence Context 最多 8k，配置不一致时会被总预算自动 clamp。风险提取与报告生成的模型输入只接收 `CURRENT_EVIDENCE_CONTEXT`（压缩摘要、Evidence ID、来源 ID 与定位元数据），原始 quote 只留在 State 中做 Evidence-to-source 校验、UI 展示和引用回溯。因此“选择/压缩”只做一次，并真正决定模型能看到的当前事实材料。
+
+State 不会整体传入模型。`build_controller_context()` 只投影问题、scope、覆盖缺口、动作摘要、剩余预算及带 `HISTORICAL_PRIOR_NOT_CURRENT_EVIDENCE` 标签的已批准历史先验；它们只能提示下一步应核验什么。`build_risk_context()` 与 `build_report_context()` 则只投影 `CURRENT_EVIDENCE`，并显式声明 Historical Prior 未被包含，故长期记忆不能成为当前 RiskEvent 的事实或报告 Citation。
+
+每次 Controller、Risk、Report 的模型路径（未调用、远程成功或远程降级）都追加一条 `context_telemetry`：记录估算输入 token、system/working/evidence/memory 占用、输出预留、候选/选中/丢弃证据数、Evidence ID、历史先验数量和硬预算是否满足。它不记录原始 Prompt、证据原文或自由式思维链；控制台/API 只读取这些可审计指标。
+
 ```mermaid
 flowchart TD
   A[采购问题和业务约束] --> B[ReAct Manager]

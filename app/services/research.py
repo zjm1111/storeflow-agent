@@ -8,6 +8,7 @@ from app.services.events import TaskEventBroker
 from app.services.llm import BailianClient, ModelCallError
 from app.services.memory import MemoryService
 from app.services.memory_candidates import MemoryCandidateExtractor
+from app.services.context import context_budget_policy
 from app.repositories.task_snapshot_history import TaskSnapshotHistoryRepository
 from app.agent.review_graph import build_review_graph
 from langgraph.types import Command
@@ -200,7 +201,7 @@ class ResearchService:
         return {
             "task_id": task["task_id"],
             "risk_events": task.get("events", []),
-            "evidence_pack": task.get("context_pack", {}),
+            "evidence_pack": task.get("evidence_context_pack") or task.get("context_pack", {}),
             "retrieval_freshness": {"source_count": len(sources), "newest_age_days": min(ages) if ages else None, "oldest_age_days": max(ages) if ages else None},
             "memory_hits": task.get("recalled_memories", []),
             "strategies": strategies,
@@ -313,7 +314,11 @@ class ResearchService:
             task["events"] = []
             task["evidence"] = []
             task["hybrid_results"] = []
-            task["context_pack"] = {"budget_tokens": 12000, "used_tokens": 0, "items": []}
+            empty_evidence_pack = {"kind": "current_evidence", "budget_tokens": context_budget_policy()["evidence_budget"], "used_tokens": 0, "items": []}
+            task["evidence_context_pack"] = empty_evidence_pack
+            # Deprecated compatibility projection for clients before the
+            # Context Management naming convergence.
+            task["context_pack"] = empty_evidence_pack
             requested = [value for value in (evidence_dimensions or []) if value in {"inventory", "delivery", "demand", "cost"}]
             if requested:
                 task["missing_dimensions"] = requested
