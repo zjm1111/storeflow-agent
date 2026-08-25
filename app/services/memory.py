@@ -67,7 +67,8 @@ class MemoryService:
                 MemoryItemRecord.memory_id, MemoryItemRecord.workspace_id,
                 MemoryItemRecord.status, MemoryItemRecord.kind, MemoryItemRecord.summary,
                 MemoryItemRecord.evidence_ids, MemoryItemRecord.scope, MemoryItemRecord.confidence,
-                MemoryItemRecord.reviewed_by, MemoryItemRecord.origin_task_id, MemoryItemRecord.reviewed_at,
+                MemoryItemRecord.reviewed_by, MemoryItemRecord.review_action, MemoryItemRecord.review_comment,
+                MemoryItemRecord.origin_task_id, MemoryItemRecord.reviewed_at,
                 MemoryItemRecord.content_hash, MemoryItemRecord.revision, MemoryItemRecord.possible_duplicate_of,
                 MemoryItemRecord.conflicts_with, MemoryItemRecord.expires_at,
                 MemoryItemRecord.supersedes_id, MemoryItemRecord.created_at,
@@ -176,7 +177,7 @@ class MemoryService:
             record = session.get(MemoryItemRecord, memory_id)
             return self._dump(record) if record and record.workspace_id == workspace_id else None
 
-    def approve(self, memory_id: str, reviewer: str, workspace_id: str = "demo") -> dict | None:
+    def approve(self, memory_id: str, reviewer: str, workspace_id: str = "demo", comment: str | None = None) -> dict | None:
         with SessionLocal.begin() as session:
             # A replacement approval changes two records.  Lock the candidate
             # and its previous approved record in this transaction so two
@@ -199,20 +200,38 @@ class MemoryService:
                 if previous is None or previous.status != "approved":
                     return None
                 previous.status, previous.reviewed_by, previous.reviewed_at = "superseded", reviewer, datetime.now(timezone.utc)
+                previous.review_action, previous.review_comment = "superseded", f"replaced_by={record.memory_id}"
                 superseded_memory_id = previous.memory_id
             reviewed_at = datetime.now(timezone.utc)
             record.status, record.reviewed_by, record.reviewed_at = "approved", reviewer, reviewed_at
+            record.review_action, record.review_comment = "approve", comment
             record.expires_at = reviewed_at + timedelta(days=self._ttl_days(record.kind))
             session.flush()
             return {**self._dump(record), "superseded_memory_id": superseded_memory_id}
 
-    def expire(self, memory_id: str, reviewer: str, workspace_id: str = "demo") -> dict | None:
+    def reject(self, memory_id: str, reviewer: str, comment: str, workspace_id: str = "demo") -> dict | None:
+        """Fail closed: rejected candidates never become cross-task priors."""
+        with SessionLocal.begin() as session:
+            record = session.scalar(select(MemoryItemRecord).where(
+                MemoryItemRecord.memory_id == memory_id,
+                MemoryItemRecord.workspace_id == workspace_id,
+            ).with_for_update())
+            if record is None or record.status != "candidate":
+                return None
+            reviewed_at = datetime.now(timezone.utc)
+            record.status, record.reviewed_by, record.reviewed_at = "rejected", reviewer, reviewed_at
+            record.review_action, record.review_comment = "reject", comment.strip()
+            session.flush()
+            return self._dump(record)
+
+    def expire(self, memory_id: str, reviewer: str, workspace_id: str = "demo", comment: str | None = None) -> dict | None:
         with SessionLocal.begin() as session:
             record = session.get(MemoryItemRecord, memory_id)
             if record is None or record.workspace_id != workspace_id:
                 return None
             reviewed_at = datetime.now(timezone.utc)
             record.status, record.reviewed_by, record.reviewed_at, record.expires_at = "expired", reviewer, reviewed_at, reviewed_at
+            record.review_action, record.review_comment = "expire", comment
             session.flush()
             return self._dump(record)
 
@@ -249,6 +268,7 @@ class MemoryService:
                 "kind": record.kind, "summary": record.summary or MemoryService._legacy_summary(record.memory_id),
                 "content": record.content, "evidence_ids": record.evidence_ids or [],
                 "scope": record.scope or {}, "confidence": record.confidence, "reviewed_by": record.reviewed_by,
+                "review_action": record.review_action, "review_comment": record.review_comment,
                 "origin_task_id": record.origin_task_id,
                 "reviewed_at": record.reviewed_at.isoformat() if record.reviewed_at else None,
                 "content_hash": record.content_hash or MemoryService._content_hash(record.content),
@@ -356,6 +376,7 @@ class MemoryService:
             "kind": item["kind"], "summary": item["summary"] or cls._legacy_summary(item["memory_id"]),
             "evidence_ids": item["evidence_ids"] or [], "scope": item["scope"] or {},
             "confidence": float(item["confidence"]), "reviewed_by": item["reviewed_by"],
+            "review_action": item["review_action"], "review_comment": item["review_comment"],
             "origin_task_id": item["origin_task_id"],
             "reviewed_at": item["reviewed_at"].isoformat() if item["reviewed_at"] else None,
             "content_hash": item["content_hash"], "revision": item["revision"] or 1,

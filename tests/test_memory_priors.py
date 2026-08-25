@@ -196,3 +196,27 @@ def test_memory_provenance_and_reviewer_only_relation_hints(monkeypatch):
     assert replacement["revision"] == 2
     # The explicit superseded predecessor is lineage, not an automatic conflict.
     assert replacement["possible_duplicate_of"] is None
+
+
+def test_memory_second_hitl_records_approval_or_rejection_reason(monkeypatch):
+    _memory_session(monkeypatch)
+    service = MemoryService()
+    candidate = service.create_candidate(
+        workspace_id="demo", origin_task_id="task-review", content="暴雨下的配送风险历史案例",
+        evidence_ids=["ev-review"], scope={"region": "上海"}, confidence=0.8,
+    )
+    rejected = service.reject(candidate["memory_id"], "reviewer-a", "该案例仅为偶发事件，不应跨任务复用")
+    assert rejected["status"] == "rejected"
+    assert rejected["review_action"] == "reject"
+    assert rejected["review_comment"] == "该案例仅为偶发事件，不应跨任务复用"
+    assert rejected["reviewed_by"] == "reviewer-a"
+    assert rejected["reviewed_at"] is not None
+    assert service.retrieve_approved_priors("demo", {"region": "上海"})["items"] == []
+
+    approved_candidate = service.create_candidate(
+        workspace_id="demo", origin_task_id="task-review-2", content="促销需求风险历史案例",
+        evidence_ids=["ev-approved"], scope={"region": "上海"}, confidence=0.8,
+    )
+    approved = service.approve(approved_candidate["memory_id"], "reviewer-b", comment="证据链完整，可作为历史先验")
+    assert approved["review_action"] == "approve"
+    assert approved["review_comment"] == "证据链完整，可作为历史先验"

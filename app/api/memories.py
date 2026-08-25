@@ -12,6 +12,7 @@ service = MemoryService()
 class MemoryAction(BaseModel):
     # Retained for old clients, but never trusted: the JWT subject is recorded.
     reviewer: str | None = Field(default=None, min_length=2, max_length=120)
+    comment: str | None = Field(default=None, max_length=1000)
     replacement_content: str | None = Field(default=None, max_length=4000)
 
 
@@ -38,13 +39,29 @@ def create_manual_candidate(request: ManualMemoryCandidateRequest, principal: Pr
 
 @router.post("/{memory_id}/approve")
 def approve(memory_id: str, request: MemoryAction, principal: Principal = Depends(require_roles("reviewer", "admin"))):
-    item = service.approve(memory_id, principal.subject, principal.workspace_id)
+    item = service.approve(memory_id, principal.subject, principal.workspace_id, request.comment)
     if not item: raise HTTPException(404, "Candidate memory not found")
     return item
 
 @router.post("/{memory_id}/expire")
 def expire(memory_id: str, request: MemoryAction, principal: Principal = Depends(require_roles("reviewer", "admin"))):
-    item = service.expire(memory_id, principal.subject, principal.workspace_id)
+    item = service.expire(memory_id, principal.subject, principal.workspace_id, request.comment)
+    if not item: raise HTTPException(404, "Memory not found")
+    return item
+
+
+@router.post("/{memory_id}/reject")
+def reject(memory_id: str, request: MemoryAction, principal: Principal = Depends(require_roles("reviewer", "admin"))):
+    if not request.comment or len(request.comment.strip()) < 3:
+        raise HTTPException(422, "A rejection comment of at least 3 characters is required")
+    item = service.reject(memory_id, principal.subject, request.comment, principal.workspace_id)
+    if not item: raise HTTPException(404, "Candidate memory not found")
+    return item
+
+
+@router.get("/{memory_id}")
+def get_memory(memory_id: str, principal: Principal = Depends(require_roles("reviewer", "admin"))):
+    item = service.get(memory_id, principal.workspace_id)
     if not item: raise HTTPException(404, "Memory not found")
     return item
 

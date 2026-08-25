@@ -55,6 +55,8 @@ Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision
 
 决策批准后由确定性 `MemoryCandidateExtractor` 形成候选，而不再拼接 RiskEvent 原文：它要求已批准策略、至少一个合法业务 scope，以及每个保留风险事件的已验证 Evidence ID；工具日志、失败信息、原始临时库存/时间数值不会复制到长期记忆正文。当前阶段按风险维度拆分为最多三条 `episodic` 候选，每条都有独立 Evidence ID、confidence 和审核动作；正文仅表达“单一风险模式 + 已批准策略 + 必须重新核验当期证据”的历史先验。超出上限的维度与候选提取拒绝原因都会持久化，但不影响已批准的当前任务决策。
 
+Memory HITL 是独立于决策审核的第二道门：reviewer/admin 对每条 candidate 单独 `approve` 或 `reject`，拒绝必须带原因；系统记录 `review_action`、`review_comment`、`reviewed_by` 与 `reviewed_at`。`rejected`、`expired`、`superseded` 均不可召回，只有 `approved` 能成为 Historical Prior。候选详情接口返回正文、Evidence ID、来源任务、scope、版本、重复/冲突提示与完整审核结果，便于人工逐条裁决。
+
 当库存、需求、到货、成本四维均有证据且没有未裁决关键冲突时，进入决策；否则在最多 6 步、最多 2 次检索、上下文 token 与延迟预算内补证。预算耗尽仍会生成带降级原因的建议草案，并自动交给人工审核，不会自动下单。
 
 ## 状态与持久化归属

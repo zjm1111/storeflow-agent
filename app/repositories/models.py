@@ -109,6 +109,8 @@ class MemoryItemRecord(Base):
     scope: Mapped[dict] = mapped_column(JSON, default=dict)
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     reviewed_by: Mapped[str | None] = mapped_column(String(120))
+    review_action: Mapped[str | None] = mapped_column(String(32))
+    review_comment: Mapped[str | None] = mapped_column(Text)
     # Provenance is kept separately from the business body so reviewer UI can
     # explain lineage without treating a historical memory as current evidence.
     origin_task_id: Mapped[str | None] = mapped_column(String(36), index=True)
