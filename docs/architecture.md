@@ -51,6 +51,8 @@ Manager 只能选择 `retrieve_evidence`、`assess_evidence_gap`、`run_decision
 
 `kind` 是生命周期策略而非展示标签：`episodic` 为任务 Agent 可提出、默认 30 天有效的历史案例；`semantic` 为 reviewer/admin 人工提出、默认 180 天有效的稳定业务事实；`procedural` 为 reviewer/admin 人工维护、默认 365 天有效的审核规则/流程。三类都仍需 Evidence ID、scope 与人工批准；任务 Agent 无法把一次执行自动提升为 semantic 或 procedural 规则。
 
+长期记忆还保存 `origin_task_id`、`reviewed_at`、内容哈希、`revision`、`possible_duplicate_of` 与 `conflicts_with`。创建候选时，仅在同 workspace、同 scope、同 kind 的候选/已批准记忆中用确定性内容哈希、词项重叠和显式相反规则生成**审核提示**；系统绝不自动合并、重写、过期或覆盖已有记忆。replacement candidate 继承来源任务并递增 revision，最终仍由审核人决定是否完成原子替换。
+
 当库存、需求、到货、成本四维均有证据且没有未裁决关键冲突时，进入决策；否则在最多 6 步、最多 2 次检索、上下文 token 与延迟预算内补证。预算耗尽仍会生成带降级原因的建议草案，并自动交给人工审核，不会自动下单。
 
 ## 状态与持久化归属

@@ -5,6 +5,8 @@ Task working memory lives in the task snapshot and is never stored here.
 """
 from __future__ import annotations
 
+import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -27,14 +29,18 @@ class MemoryService:
     def create_candidate(
         self, *, workspace_id: str, content: str, evidence_ids: list[str], scope: dict,
         confidence: float, kind: str = "episodic", human_initiated: bool = False,
+        origin_task_id: str | None = None,
     ) -> dict:
         self._validate_candidate_kind(kind, human_initiated=human_initiated)
-        record = MemoryItemRecord(
-            memory_id=f"mem-{uuid4().hex[:12]}", workspace_id=workspace_id, content=content[:4000],
-            summary=self._summary(content), evidence_ids=evidence_ids, scope=scope,
-            confidence=max(0.0, min(1.0, confidence)), status="candidate", kind=kind,
-        )
         with SessionLocal.begin() as session:
+            relations = self._candidate_relations(session, workspace_id, content, scope, kind)
+            record = MemoryItemRecord(
+                memory_id=f"mem-{uuid4().hex[:12]}", workspace_id=workspace_id, content=content[:4000],
+                summary=self._summary(content), evidence_ids=evidence_ids, scope=scope,
+                confidence=max(0.0, min(1.0, confidence)), status="candidate", kind=kind,
+                origin_task_id=origin_task_id, content_hash=self._content_hash(content), revision=1,
+                possible_duplicate_of=relations["possible_duplicate_of"], conflicts_with=relations["conflicts_with"],
+            )
             session.add(record)
         return self._dump(record)
 
@@ -61,7 +67,9 @@ class MemoryService:
                 MemoryItemRecord.memory_id, MemoryItemRecord.workspace_id,
                 MemoryItemRecord.status, MemoryItemRecord.kind, MemoryItemRecord.summary,
                 MemoryItemRecord.evidence_ids, MemoryItemRecord.scope, MemoryItemRecord.confidence,
-                MemoryItemRecord.reviewed_by, MemoryItemRecord.expires_at,
+                MemoryItemRecord.reviewed_by, MemoryItemRecord.origin_task_id, MemoryItemRecord.reviewed_at,
+                MemoryItemRecord.content_hash, MemoryItemRecord.revision, MemoryItemRecord.possible_duplicate_of,
+                MemoryItemRecord.conflicts_with, MemoryItemRecord.expires_at,
                 MemoryItemRecord.supersedes_id, MemoryItemRecord.created_at,
             ).where(
                 MemoryItemRecord.workspace_id == workspace_id,
@@ -190,10 +198,11 @@ class MemoryService:
                 # current approved memory instead.
                 if previous is None or previous.status != "approved":
                     return None
-                previous.status, previous.reviewed_by = "superseded", reviewer
+                previous.status, previous.reviewed_by, previous.reviewed_at = "superseded", reviewer, datetime.now(timezone.utc)
                 superseded_memory_id = previous.memory_id
-            record.status, record.reviewed_by = "approved", reviewer
-            record.expires_at = datetime.now(timezone.utc) + timedelta(days=self._ttl_days(record.kind))
+            reviewed_at = datetime.now(timezone.utc)
+            record.status, record.reviewed_by, record.reviewed_at = "approved", reviewer, reviewed_at
+            record.expires_at = reviewed_at + timedelta(days=self._ttl_days(record.kind))
             session.flush()
             return {**self._dump(record), "superseded_memory_id": superseded_memory_id}
 
@@ -202,7 +211,8 @@ class MemoryService:
             record = session.get(MemoryItemRecord, memory_id)
             if record is None or record.workspace_id != workspace_id:
                 return None
-            record.status, record.reviewed_by, record.expires_at = "expired", reviewer, datetime.now(timezone.utc)
+            reviewed_at = datetime.now(timezone.utc)
+            record.status, record.reviewed_by, record.reviewed_at, record.expires_at = "expired", reviewer, reviewed_at, reviewed_at
             session.flush()
             return self._dump(record)
 
@@ -217,11 +227,18 @@ class MemoryService:
             # Creating a replacement is only a proposal.  The old reviewed
             # memory must remain recallable until the replacement is approved;
             # otherwise a rejected candidate would create a memory gap.
+            relations = self._candidate_relations(
+                session, workspace_id, replacement_content, previous.scope or {}, previous.kind,
+                exclude_memory_ids={previous.memory_id},
+            )
             replacement = MemoryItemRecord(
                 memory_id=f"mem-{uuid4().hex[:12]}", workspace_id=workspace_id, status="candidate",
                 kind=previous.kind, content=replacement_content[:4000], evidence_ids=previous.evidence_ids,
                 summary=self._summary(replacement_content), scope=previous.scope,
                 confidence=previous.confidence, supersedes_id=previous.memory_id,
+                origin_task_id=previous.origin_task_id, content_hash=self._content_hash(replacement_content),
+                revision=(previous.revision or 1) + 1,
+                possible_duplicate_of=relations["possible_duplicate_of"], conflicts_with=relations["conflicts_with"],
             )
             session.add(replacement); session.flush()
             return self._dump(previous), self._dump(replacement)
@@ -232,6 +249,11 @@ class MemoryService:
                 "kind": record.kind, "summary": record.summary or MemoryService._legacy_summary(record.memory_id),
                 "content": record.content, "evidence_ids": record.evidence_ids or [],
                 "scope": record.scope or {}, "confidence": record.confidence, "reviewed_by": record.reviewed_by,
+                "origin_task_id": record.origin_task_id,
+                "reviewed_at": record.reviewed_at.isoformat() if record.reviewed_at else None,
+                "content_hash": record.content_hash or MemoryService._content_hash(record.content),
+                "revision": record.revision or 1, "possible_duplicate_of": record.possible_duplicate_of,
+                "conflicts_with": record.conflicts_with or [],
                 "expires_at": record.expires_at.isoformat() if record.expires_at else None,
                 "supersedes_id": record.supersedes_id, "created_at": record.created_at.isoformat() if record.created_at else None}
 
@@ -240,6 +262,67 @@ class MemoryService:
         """Deterministic catalog text; it never invents a business claim."""
         normalized = " ".join(content.split())
         return normalized[:max_chars] + ("…" if len(normalized) > max_chars else "")
+
+    @staticmethod
+    def _normalized_content(content: str) -> str:
+        return " ".join(content.lower().split())
+
+    @classmethod
+    def _content_hash(cls, content: str) -> str:
+        return hashlib.sha256(cls._normalized_content(content).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _token_set(content: str) -> set[str]:
+        # Chinese characters and alphanumeric terms both become stable, local
+        # reviewer hints. This is deliberately not an LLM-based auto-merge.
+        return set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]", content.lower()))
+
+    @classmethod
+    def _candidate_relations(
+        cls, session, workspace_id: str, content: str, scope: dict, kind: str,
+        *, exclude_memory_ids: set[str] | None = None,
+    ) -> dict:
+        """Return conservative reviewer hints; never mutate another memory.
+
+        Exact hash or high lexical overlap is a possible duplicate. A conflict
+        needs an explicit opposite operational claim, avoiding speculative
+        semantic conflict detection by an LLM.
+        """
+        excluded = exclude_memory_ids or set()
+        candidates = session.scalars(select(MemoryItemRecord).where(
+            MemoryItemRecord.workspace_id == workspace_id,
+            MemoryItemRecord.kind == kind,
+            MemoryItemRecord.status.in_(("candidate", "approved")),
+        ).order_by(MemoryItemRecord.created_at.desc())).all()
+        incoming_hash, incoming_tokens = cls._content_hash(content), cls._token_set(content)
+        duplicates, conflicts = [], []
+        for item in candidates:
+            if item.memory_id in excluded or (item.scope or {}) != (scope or {}):
+                continue
+            existing_hash = item.content_hash or cls._content_hash(item.content)
+            existing_tokens = cls._token_set(item.content)
+            union = incoming_tokens | existing_tokens
+            similarity = len(incoming_tokens & existing_tokens) / len(union) if union else 0.0
+            if existing_hash == incoming_hash or similarity >= 0.86:
+                duplicates.append(item.memory_id)
+            if cls._has_explicit_conflict(content, item.content):
+                conflicts.append(item.memory_id)
+        # Approved records are more important reviewer references than pending
+        # candidates; SQL order already makes the result deterministic enough.
+        return {"possible_duplicate_of": duplicates[0] if duplicates else None, "conflicts_with": sorted(set(conflicts))}
+
+    @classmethod
+    def _has_explicit_conflict(cls, incoming: str, existing: str) -> bool:
+        left, right = cls._normalized_content(incoming), cls._normalized_content(existing)
+        opposite_pairs = (("增加", "减少"), ("提前", "延后"), ("正常配送", "配送延迟"), ("必须", "无需"))
+        if any((a in left and b in right) or (b in left and a in right) for a, b in opposite_pairs):
+            return True
+        # Same timing policy with a different stated number is a transparent,
+        # conservative conflict hint (for example "提前 1 天" vs "提前 2 天").
+        pattern = re.compile(r"(提前|延后|延迟|安全库存)[^0-9一二三四五六七八九十]{0,8}([0-9一二三四五六七八九十]+)\s*天")
+        left_claims = {(name, value) for name, value in pattern.findall(left)}
+        right_claims = {(name, value) for name, value in pattern.findall(right)}
+        return any(name == other_name and value != other_value for name, value in left_claims for other_name, other_value in right_claims)
 
     @staticmethod
     def _legacy_summary(memory_id: str) -> str:
@@ -273,6 +356,10 @@ class MemoryService:
             "kind": item["kind"], "summary": item["summary"] or cls._legacy_summary(item["memory_id"]),
             "evidence_ids": item["evidence_ids"] or [], "scope": item["scope"] or {},
             "confidence": float(item["confidence"]), "reviewed_by": item["reviewed_by"],
+            "origin_task_id": item["origin_task_id"],
+            "reviewed_at": item["reviewed_at"].isoformat() if item["reviewed_at"] else None,
+            "content_hash": item["content_hash"], "revision": item["revision"] or 1,
+            "possible_duplicate_of": item["possible_duplicate_of"], "conflicts_with": item["conflicts_with"] or [],
             "expires_at": item["expires_at"].isoformat() if item["expires_at"] else None,
             "supersedes_id": item["supersedes_id"],
             "created_at": item["created_at"].isoformat() if item["created_at"] else None,

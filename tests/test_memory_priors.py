@@ -158,3 +158,41 @@ def test_memory_kind_lifecycle_limits_agent_candidates_and_applies_kind_ttl(monk
     assert approved["kind"] == "procedural"
     expires_at = datetime.fromisoformat(approved["expires_at"])
     assert 364 <= (expires_at - datetime.now(timezone.utc)).days <= 365
+
+
+def test_memory_provenance_and_reviewer_only_relation_hints(monkeypatch):
+    _memory_session(monkeypatch)
+    service = MemoryService()
+    base = service.create_candidate(
+        workspace_id="demo", origin_task_id="task-001", kind="episodic",
+        content="暴雨预警时提前 1 天补货", evidence_ids=["ev-1"],
+        scope={"region": "上海", "sku": "drink-001"}, confidence=0.8,
+    )
+    duplicate = service.create_candidate(
+        workspace_id="demo", origin_task_id="task-002", kind="episodic",
+        content="暴雨预警时提前 1 天补货", evidence_ids=["ev-2"],
+        scope={"region": "上海", "sku": "drink-001"}, confidence=0.8,
+    )
+    conflict = service.create_candidate(
+        workspace_id="demo", origin_task_id="task-003", kind="episodic",
+        content="暴雨预警时提前 2 天补货", evidence_ids=["ev-3"],
+        scope={"region": "上海", "sku": "drink-001"}, confidence=0.8,
+    )
+
+    assert base["origin_task_id"] == "task-001"
+    assert len(base["content_hash"]) == 64
+    assert base["revision"] == 1
+    assert duplicate["possible_duplicate_of"] == base["memory_id"]
+    assert base["memory_id"] in conflict["conflicts_with"]
+    # Hints only annotate the new candidate; they never alter a prior record.
+    assert service.get(base["memory_id"])["status"] == "candidate"
+
+    approved = service.approve(base["memory_id"], "reviewer-a")
+    assert approved["reviewed_by"] == "reviewer-a"
+    assert approved["reviewed_at"] is not None
+
+    _, replacement = service.supersede(base["memory_id"], "暴雨预警时提前 3 天补货", "reviewer-b")
+    assert replacement["origin_task_id"] == "task-001"
+    assert replacement["revision"] == 2
+    # The explicit superseded predecessor is lineage, not an automatic conflict.
+    assert replacement["possible_duplicate_of"] is None

@@ -183,6 +183,7 @@ class ResearchService:
                     scope=task.get("scope", {}),
                     confidence=min(event.get("confidence", 0.5) for event in approved_events),
                     kind="episodic",
+                    origin_task_id=task_id,
                 )
             self._audit(task, action, comment, None, "approved")
         elif action == "modify_constraints":

@@ -109,6 +109,14 @@ class MemoryItemRecord(Base):
     scope: Mapped[dict] = mapped_column(JSON, default=dict)
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     reviewed_by: Mapped[str | None] = mapped_column(String(120))
+    # Provenance is kept separately from the business body so reviewer UI can
+    # explain lineage without treating a historical memory as current evidence.
+    origin_task_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    possible_duplicate_of: Mapped[str | None] = mapped_column(String(64))
+    conflicts_with: Mapped[list] = mapped_column(JSON, default=list)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     supersedes_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
