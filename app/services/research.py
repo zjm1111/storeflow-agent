@@ -8,7 +8,7 @@ from app.services.events import TaskEventBroker
 from app.services.llm import BailianClient, ModelCallError
 from app.services.memory import MemoryService
 from app.services.memory_candidates import MemoryCandidateExtractor
-from app.repositories.checkpoints import CheckpointRepository
+from app.repositories.task_snapshot_history import TaskSnapshotHistoryRepository
 from app.agent.review_graph import build_review_graph
 from langgraph.types import Command
 
@@ -18,8 +18,41 @@ class ResearchService:
         self.repository = repository or TaskRepository()
         self.graph = build_research_graph()
         self.events = events or TaskEventBroker()
-        self.checkpoints = CheckpointRepository()
+        self.snapshot_history = TaskSnapshotHistoryRepository()
         self.review_graph = build_review_graph()
+
+    def _new_graph_execution(self, task_id: str, *, legacy_resume: bool = False) -> dict:
+        """Business projection for a distinct native graph run.
+
+        ``run_id`` distinguishes a review-driven replan from an earlier
+        terminal run even though both intentionally share ``thread_id=task_id``.
+        It does not determine graph recovery; LangGraph's pending checkpoint
+        does. ``legacy_resume`` is a one-release bridge for snapshots written
+        before the main graph had a native checkpointer.
+        """
+        return {
+            "thread_id": task_id,
+            "run_id": f"run-{uuid4().hex}",
+            "checkpointer_mode": getattr(self.graph, "supplymind_checkpointer_mode", "unknown"),
+            "degradation": getattr(self.graph, "supplymind_checkpointer_degradation", None),
+            "legacy_resume": legacy_resume,
+        }
+
+    @staticmethod
+    def _graph_config(task_id: str) -> dict:
+        return {"configurable": {"thread_id": task_id}}
+
+    def _matching_native_snapshot(self, task_id: str, execution: dict):
+        """Return only a checkpoint belonging to this task's current run."""
+        try:
+            snapshot = self.graph.get_state(self._graph_config(task_id))
+        except Exception:
+            return None
+        values = dict(snapshot.values or {})
+        native_execution = values.get("graph_execution") or {}
+        if values.get("task_id") != task_id or native_execution.get("run_id") != execution.get("run_id"):
+            return None
+        return snapshot
 
     def start(self, question: str, *, workspace_id: str = "demo", scope: dict | None = None, constraints: dict | None = None, idempotency_key: str | None = None) -> dict:
         if idempotency_key:
@@ -29,8 +62,9 @@ class ResearchService:
         task_id = str(uuid4())
         state = initial_state(task_id, question, workspace_id, scope, constraints, idempotency_key)
         state["status"] = "queued"
+        state["graph_execution"] = self._new_graph_execution(task_id)
         self.repository.save(task_id, state)
-        self.checkpoints.save(state)
+        self.snapshot_history.record_snapshot(state)
         self.events.publish(task_id, "task", {"task_id": task_id, "status": "queued", "state_version": state.get("state_version")})
         return state
 
@@ -40,14 +74,56 @@ class ResearchService:
             return
         expected_state_version = int(state.get("state_version", 0))
         trace_count = 0
+        execution = state.get("graph_execution") or {}
+        if not execution.get("run_id"):
+            # A persisted task from before the native-checkpoint migration.
+            # It may still have an action in flight, for which the old action
+            # snapshot provides one safe compatibility recovery only.
+            active = state.get("active_action") or {}
+            legacy_resume = active.get("status") in {"planned", "running", "unknown"}
+            execution = self._new_graph_execution(task_id, legacy_resume=legacy_resume)
+            state["graph_execution"] = execution
+        graph_config = self._graph_config(task_id)
+        native_snapshot = self._matching_native_snapshot(task_id, execution)
+        graph_input: dict | None = state
+        recovery_source = "new_run"
+        if native_snapshot is not None and native_snapshot.next:
+            # Native graph state, not checkpoint.node, selects the next node.
+            # The checkpoint before agent_execute_tool includes active_action,
+            # so a crash retries the same idempotent read-only action.
+            graph_input = None
+            recovery_source = "native_checkpoint"
+        elif native_snapshot is not None:
+            # The graph completed but a worker died before projecting the final
+            # state to TaskRepository. Reconcile its terminal native state; do
+            # not execute the graph a second time.
+            terminal = dict(native_snapshot.values)
+            terminal["state_version"] = expected_state_version
+            terminal["graph_execution"] = {
+                **execution,
+                "recovery_source": "native_terminal_projection",
+                "last_checkpoint_id": native_snapshot.config.get("configurable", {}).get("checkpoint_id"),
+                "pending_nodes": list(native_snapshot.next),
+            }
+            try:
+                self.repository.save(task_id, terminal)
+                self.snapshot_history.record_snapshot(terminal)
+            except StateConflictError:
+                return
+            state = terminal
+            expected_state_version = int(terminal["state_version"])
+            graph_input = None
+            recovery_source = "native_terminal_projection"
         try:
-            for current in self.graph.stream(state, stream_mode="values"):
+            if graph_input is not None:
+                graph_input["graph_execution"] = {**execution, "recovery_source": recovery_source}
+            for current in self.graph.stream(graph_input, config=graph_config, stream_mode="values", durability="sync"):
                 # LangGraph emits immutable-ish snapshots. Keep the database
                 # CAS version in this runner between node persistence points.
                 current["state_version"] = expected_state_version
                 self.repository.save(task_id, current)
                 expected_state_version = current["state_version"]
-                self.checkpoints.save(current)
+                self.snapshot_history.record_snapshot(current)
                 trace = current.get("trace", [])
                 for entry in trace[trace_count:]:
                     self.events.publish(task_id, "trace", entry)
@@ -60,6 +136,21 @@ class ResearchService:
                 self.events.publish(task_id, "task", {"task_id": task_id, "status": latest.get("status"), "state_version": latest.get("state_version"), "degradation": "stale worker snapshot blocked by optimistic lock"})
             return
         latest = self.repository.get(task_id, workspace_id) or state
+        native_after = self._matching_native_snapshot(task_id, execution)
+        if native_after is not None:
+            execution_projection = {
+                **(latest.get("graph_execution") or execution),
+                "recovery_source": recovery_source,
+                "last_checkpoint_id": native_after.config.get("configurable", {}).get("checkpoint_id"),
+                "pending_nodes": list(native_after.next),
+            }
+            if latest.get("graph_execution") != execution_projection:
+                latest["graph_execution"] = execution_projection
+                try:
+                    self.repository.save(task_id, latest)
+                    self.snapshot_history.record_snapshot(latest)
+                except StateConflictError:
+                    latest = self.repository.get(task_id, workspace_id) or latest
         # The bounded manager explicitly asks for HITL after a decision draft.
         # Make that transition here, after the research graph checkpoint is
         # durable, so a worker restart cannot lose the native interrupt state.
@@ -78,7 +169,7 @@ class ResearchService:
             self.repository.save(task_id, state)
         except StateConflictError:
             return None
-        self.checkpoints.save(state)
+        self.snapshot_history.record_snapshot(state)
         return state
 
     def get(self, task_id: str, workspace_id: str = "demo") -> dict | None:
@@ -135,7 +226,7 @@ class ResearchService:
         task["human_review"] = {"status": "awaiting_review", "comment": None, "constraints": None, "interrupt_thread_id": f"review:{task_id}", "payload": payload}
         self._audit(task, "decision_ready", None, None, "awaiting_review")
         self.repository.save(task_id, task)
-        self.checkpoints.save(task)
+        self.snapshot_history.record_snapshot(task)
         self.events.publish(task_id, "task", {"task_id": task_id, "status": "awaiting_review", "state_version": task.get("state_version")})
         return task
 
@@ -228,6 +319,10 @@ class ResearchService:
                 task["missing_dimensions"] = requested
                 task["working_memory"] = {**task.get("working_memory", {}), "coverage_gaps": requested}
             task["checkpoint"] = {"node": "initialize", "version": task.get("checkpoint", {}).get("version", 0) + 1}
+            # A replan is a new native graph run on the same task thread. The
+            # fresh run id prevents a terminal checkpoint from the previous
+            # review pass being mistaken for resumable work.
+            task["graph_execution"] = self._new_graph_execution(task_id)
             self._audit(task, action, comment, {"evidence_dimensions": requested}, "queued")
         elif action == "reject":
             task["status"] = "rejected"
@@ -240,7 +335,7 @@ class ResearchService:
             # authenticated subject supplied by the API dependency.
             task["audit_trail"][-1]["reviewer"] = reviewer
         self.repository.save(task_id, task)
-        self.checkpoints.save(task)
-        self.checkpoints.record_review(task, action, reviewer, {"comment": comment, "constraints": constraints, "checkpoint": task.get("checkpoint")})
+        self.snapshot_history.record_snapshot(task)
+        self.snapshot_history.record_review(task, action, reviewer, {"comment": comment, "constraints": constraints, "action_audit": task.get("checkpoint")})
         self.events.publish(task_id, "task", {"task_id": task_id, "status": task["status"], "state_version": task.get("state_version")})
         return task

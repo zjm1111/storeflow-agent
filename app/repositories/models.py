@@ -143,6 +143,8 @@ class EvaluationRunRecord(Base):
 
 
 class CheckpointRecord(Base):
+    # Legacy physical table name retained for already-created demo databases.
+    # It stores TaskSnapshotHistory audit rows, not LangGraph checkpoints.
     __tablename__ = "checkpoints"
     checkpoint_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)

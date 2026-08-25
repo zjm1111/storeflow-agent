@@ -11,5 +11,5 @@
 | 长期记忆 | 无 scope 命中或索引不可用 | 仅无记忆先验，不把网页或草稿写入长期记忆 | `recalled_memories`、`memory_conflicts` |
 | Monte Carlo | 计算异常 | 拒绝产生数值建议，进入人工审核并标记失败 | `decision`、`errors` |
 | OR-Tools | 求解失败或约束不可行 | 展示最大可达服务水平和补救动作 | `constraint_feasible`、`infeasibility_reason` |
-| Celery worker | 进程中断 | MySQL 任务快照/checkpoint 用于幂等恢复 | `checkpoint`、任务版本 |
+| Celery worker | 进程中断 | LangGraph MySQL checkpoint 从 pending node 续跑；TaskRepository 投影状态由 `state_version` CAS 防覆盖；任务快照历史仅供审计 | `graph_execution`、`state_version`、`active_action` |
 | SSE | 浏览器断线或 JWT Header 限制 | 前端 fetch stream + 2 秒 polling 刷新状态 | Redis Stream ID、任务状态 |

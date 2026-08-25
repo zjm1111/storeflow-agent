@@ -50,7 +50,7 @@ def _persist_phase(service: ResearchService, phase: str) -> tuple[dict, str]:
     if phase == "completed":
         state.update(agent_execute_tool(state))
     service.repository.save(state["task_id"], state)
-    service.checkpoints.save(state)
+    service.snapshot_history.record_snapshot(state)
     return state, action_id
 
 
@@ -67,6 +67,8 @@ def test_crash_before_or_during_tool_reuses_one_action_id(deterministic_retrieva
     assert action["status"] == "completed"
     assert action["attempts"] == expected_attempts
     assert len([item for item in recovered["agent_actions"] if item["action_id"] == action_id]) == 1
+    assert recovered["graph_execution"]["thread_id"] == state["task_id"]
+    assert recovered["graph_execution"]["checkpointer_mode"] == "memory"
     assert recovered["status"] == "awaiting_review"
 
 
@@ -83,7 +85,7 @@ def test_crash_after_completed_tool_does_not_reexecute_action(deterministic_retr
     assert action["status"] == "completed"
     assert action["attempts"] == 1
     assert recovered["status"] == "awaiting_review"
-    assert service.checkpoints.latest(state["task_id"])["state_version"] == recovered["state_version"]
+    assert service.snapshot_history.latest_snapshot(state["task_id"])["state_version"] == recovered["state_version"]
 
 
 def test_review_replan_can_restart_in_a_new_service_process(deterministic_retrieval):

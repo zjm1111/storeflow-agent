@@ -51,6 +51,7 @@ class ResearchState(TypedDict, total=False):
     model_decision_count: int
     max_model_decisions: int
     review_requested: bool
+    graph_execution: dict
 
 
 def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope: dict | None = None, constraints: dict | None = None, idempotency_key: str | None = None) -> ResearchState:
@@ -74,6 +75,9 @@ def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope
         "model_decision_count": 0,
         "max_model_decisions": 2,
         "review_requested": False,
+        # Populated by ResearchService. LangGraph owns graph recovery using
+        # this run id and the task-id thread; this is only a task projection.
+        "graph_execution": {},
         "question": question,
         "plan": None,
         "sources": [],

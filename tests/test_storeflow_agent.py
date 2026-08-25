@@ -53,6 +53,9 @@ def test_interrupted_action_becomes_unknown_then_retries_with_same_action_id():
 
 def test_resume_route_uses_action_phase_not_only_checkpoint_node():
     state = initial_state("resume-agent", "暴雨期间门店饮料促销如何订货？")
+    # This is a one-release compatibility branch. New tasks resume through
+    # LangGraph's native pending checkpoint and bypass START entirely.
+    state["graph_execution"] = {"legacy_resume": True}
     state.update(agent_decide_next_action(state))
     assert _resume_route(state) == "agent_mark_action_running"
     state.update(agent_mark_action_running(state))

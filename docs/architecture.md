@@ -25,7 +25,7 @@ flowchart TD
   J --> K[三策略 KPI 和建议草案]
   K --> B
   C -->|request human review or finish| L[LangGraph interrupt]
-  L --> M[MySQL checkpoint: awaiting review]
+  L --> M[MySQL LangGraph Checkpointer: awaiting review]
   M -->|批准| N[审批式长期记忆]
   M -->|改约束或补证| B
   M -->|拒绝| O[审计结束]
@@ -41,7 +41,7 @@ planned → running → completed
                   └→ worker interruption → unknown → retry with same action_id
 ```
 
-动作记录包含稳定的 `action_id`、由 `task_id:action_id` 派生的幂等键、执行次数、开始/完成时间、Observation 和关联 Evidence ID。checkpoint 的 `node` 只表示最后成功持久化的执行阶段；恢复路由同时读取 `active_action.status`：`planned` 进入执行准备，`running/unknown` 先标记中断再以相同动作 ID 重试，`completed/failed` 回到 Manager。当前工具均为只读；这提供本地状态幂等和外部请求可审计的至少一次重试语义，而不宣称跨 Tavily/数据库的分布式 exactly-once。
+动作记录包含稳定的 `action_id`、由 `task_id:action_id` 派生的幂等键、执行次数、开始/完成时间、Observation 和关联 Evidence ID。主图恢复先读取 LangGraph 原生 MySQL checkpoint：若该线程有 pending node，worker 以 `stream(None, thread_id)` 直接续跑该节点，因此不会再让自定义 `checkpoint.node` 决定图从哪里开始。工具开始前的原生 checkpoint 含有 `active_action`，中断后会以相同动作 ID 重试。旧版本任务快照才会一次性走兼容路由：它读取 `active_action.status`，`planned` 进入执行准备，`running/unknown` 先标记中断再以相同动作 ID 重试。当前工具均为只读；这提供本地状态幂等和外部请求可审计的至少一次重试语义，而不宣称跨 Tavily/数据库的分布式 exactly-once。
 
 ## 高层白名单与停止规则
 
@@ -64,13 +64,19 @@ Memory HITL 是独立于决策审核的第二道门：reviewer/admin 对每条 c
 | 状态域 | 包含内容 | 持久化与职责 |
 | --- | --- | --- |
 | Task 生命周期 | `queued/running/completed/awaiting_review/approved/rejected`、幂等键、审计 | MySQL 任务快照；Redis Streams 发布状态事件 |
-| Agent 工作状态 | 已选动作、Observation 摘要、预算、覆盖缺口、Evidence ID | LangGraph State + MySQL checkpoint；不记录自由式思维链 |
+| Agent 工作状态 | 已选动作、Observation 摘要、预算、覆盖缺口、Evidence ID | LangGraph State；主 Research Graph 与 Review Graph 均以 `thread_id=task_id`（审核使用 `review:task_id`）写入 MySQL 原生 Checkpointer；不记录自由式思维链 |
 | Business Inputs | 区域、门店、SKU、库存、需求、提前期、成本与预算 | MySQL 任务快照；仅用于单门店单 SKU 单周期模拟 |
 | Decision/Review | RiskEvent、三策略 KPI、约束 diff、审核意见、记忆候选 | MySQL；审核通过后才由 Qdrant/记忆索引提供跨任务召回 |
 
 内部资料向量与元数据由 Qdrant 承载；Redis 仅用于 URL 缓存和任务事件，不能作为长期业务事实来源。详细故障行为见 [Fallback Matrix](fallback-matrix.md)。
 
-`checkpoint.version` 与 `state_version` 是两条独立的版本线：前者描述 Agent 已持久化的执行位置，后者是 MySQL 任务快照的乐观锁版本。每次写入都以 `WHERE state_version = expected` compare-and-swap；旧 worker 或并发审核写入不会覆盖较新的完整 State，而是收到冲突并重新读取。
+## 执行 Checkpoint 与业务快照
+
+Research Graph 与 Review Graph 都通过 LangGraph 原生 MySQL Checkpointer 保存 durable execution：前者固定使用 `thread_id=task_id`，后者使用 `review:task_id` 以隔离审核 interrupt 线程。它回答“图执行到哪个节点、interrupt 后从哪里继续”。Research worker 会核对 `run_id`，仅恢复属于当前任务轮次的 pending checkpoint；完成但尚未写入业务表的 native terminal state 会被投影回 TaskRepository，而不是重新执行图。审核要求补证会生成新的 `run_id`，避免同一任务此前已结束的 checkpoint 被误当作本轮恢复点。
+
+TaskRepository 始终是业务真相源，负责 `task_id`、`workspace_id`、幂等创建、前端查询和最新业务投影。`state_version` 是该投影的 MySQL 乐观锁版本；每次写入都以 `WHERE state_version = expected` compare-and-swap，旧 worker 或并发审核写入不会覆盖较新的完整 State，而是收到冲突并重新读取。动作级 `checkpoint.version`、`active_action` 与 `action_id` 继续用于工具幂等、审计与故障排查，而非替代 LangGraph 的执行 checkpoint。
+
+`TaskSnapshotHistoryRepository` 将每个动作阶段的最新业务投影写入遗留物理表 `checkpoints`（为兼容已有演示数据，表名暂不迁移）。它只承担任务快照历史、审核审计和故障排查；`latest_snapshot()` 明确是诊断读取，任何新任务的主图都不得从它路由或恢复。旧的 `CheckpointRepository` 导入名仅保留一个版本兼容别名，新的应用代码全部使用 `record_snapshot()` / `latest_snapshot()`。
 
 ## 异步测试约定
 
