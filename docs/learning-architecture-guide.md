@@ -154,6 +154,8 @@ candidate → approved → expired
 
 召回采用两阶段而不是将全部记忆正文塞入任务状态：先读取 `memory_id / kind / summary / scope / confidence / TTL` 的轻量 catalog，按 scope、审核置信度与新鲜度选择最多 5 条；再以单独的 1600-token 默认预算加载正文。它只作为历史 Prior，不占用当前 Evidence 的事实引用边界。
 
+`kind` 的三类规则是：`episodic`（历史决策案例，默认 30 天）可由任务 Agent 生成候选；`semantic`（稳定业务事实，默认 180 天）和 `procedural`（审核后流程/规则，默认 365 天）只能由 reviewer/admin 通过 `POST /memories/candidates` 人工创建候选。这样一次模型/任务输出无法自动变成跨任务业务规则。
+
 若历史记忆和当天配送/天气/促销证据冲突，界面显示待复核；新证据不会被旧记忆自动覆盖。
 
 源码：[app/services/memory.py](../app/services/memory.py)、[app/repositories/tasks.py](../app/repositories/tasks.py)。

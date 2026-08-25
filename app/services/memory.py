@@ -16,11 +16,23 @@ from app.repositories.models import MemoryItemRecord
 
 
 class MemoryService:
-    def create_candidate(self, *, workspace_id: str, content: str, evidence_ids: list[str], scope: dict, confidence: float) -> dict:
+    _KIND_TTLS = {
+        "episodic": "memory_episodic_ttl_days",
+        "semantic": "memory_semantic_ttl_days",
+        "procedural": "memory_procedural_ttl_days",
+        # Kept only for records created before the explicit kind lifecycle.
+        "risk_pattern": "memory_default_ttl_days",
+    }
+
+    def create_candidate(
+        self, *, workspace_id: str, content: str, evidence_ids: list[str], scope: dict,
+        confidence: float, kind: str = "episodic", human_initiated: bool = False,
+    ) -> dict:
+        self._validate_candidate_kind(kind, human_initiated=human_initiated)
         record = MemoryItemRecord(
             memory_id=f"mem-{uuid4().hex[:12]}", workspace_id=workspace_id, content=content[:4000],
             summary=self._summary(content), evidence_ids=evidence_ids, scope=scope,
-            confidence=max(0.0, min(1.0, confidence)), status="candidate",
+            confidence=max(0.0, min(1.0, confidence)), status="candidate", kind=kind,
         )
         with SessionLocal.begin() as session:
             session.add(record)
@@ -181,7 +193,7 @@ class MemoryService:
                 previous.status, previous.reviewed_by = "superseded", reviewer
                 superseded_memory_id = previous.memory_id
             record.status, record.reviewed_by = "approved", reviewer
-            record.expires_at = datetime.now(timezone.utc) + timedelta(days=get_settings().memory_default_ttl_days)
+            record.expires_at = datetime.now(timezone.utc) + timedelta(days=self._ttl_days(record.kind))
             session.flush()
             return {**self._dump(record), "superseded_memory_id": superseded_memory_id}
 
@@ -236,6 +248,22 @@ class MemoryService:
     @staticmethod
     def _token_estimate(content: str) -> int:
         return max(1, (len(content) + 3) // 4)
+
+    @classmethod
+    def _validate_candidate_kind(cls, kind: str, *, human_initiated: bool) -> None:
+        if kind not in cls._KIND_TTLS:
+            raise ValueError(f"unsupported memory kind: {kind}")
+        # An Agent can summarize a reviewed task as an episodic case, but it
+        # must never promote one task into a durable business fact or policy.
+        if not human_initiated and kind != "episodic":
+            raise ValueError("Agent-created candidates must use kind=episodic")
+
+    @classmethod
+    def _ttl_days(cls, kind: str) -> int:
+        settings = get_settings()
+        attribute = cls._KIND_TTLS.get(kind, "memory_default_ttl_days")
+        fallback = getattr(settings, "memory_default_ttl_days", 90)
+        return max(1, int(getattr(settings, attribute, fallback)))
 
     @classmethod
     def _catalog_dump(cls, item: dict) -> dict:

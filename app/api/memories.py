@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.services.memory import MemoryService
@@ -11,6 +13,28 @@ class MemoryAction(BaseModel):
     # Retained for old clients, but never trusted: the JWT subject is recorded.
     reviewer: str | None = Field(default=None, min_length=2, max_length=120)
     replacement_content: str | None = Field(default=None, max_length=4000)
+
+
+class ManualMemoryCandidateRequest(BaseModel):
+    """Human-maintained facts and playbooks must start at the review boundary."""
+    kind: Literal["episodic", "semantic", "procedural"]
+    content: str = Field(min_length=5, max_length=4000)
+    evidence_ids: list[str] = Field(min_length=1, max_length=32)
+    scope: dict[str, str] = Field(default_factory=dict)
+    confidence: float = Field(default=0.8, ge=0, le=1)
+
+
+@router.post("/candidates", status_code=201)
+def create_manual_candidate(request: ManualMemoryCandidateRequest, principal: Principal = Depends(require_roles("reviewer", "admin"))):
+    """Create a reviewer-owned candidate; procedural memory is never agent-made."""
+    try:
+        return service.create_candidate(
+            workspace_id=principal.workspace_id, content=request.content,
+            evidence_ids=request.evidence_ids, scope=request.scope,
+            confidence=request.confidence, kind=request.kind, human_initiated=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 @router.post("/{memory_id}/approve")
 def approve(memory_id: str, request: MemoryAction, principal: Principal = Depends(require_roles("reviewer", "admin"))):

@@ -102,7 +102,7 @@ class MemoryItemRecord(Base):
     memory_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(24), index=True, nullable=False, default="candidate")
-    kind: Mapped[str] = mapped_column(String(48), nullable=False, default="risk_pattern")
+    kind: Mapped[str] = mapped_column(String(48), nullable=False, default="episodic")
     summary: Mapped[str | None] = mapped_column(String(600))
     content: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_ids: Mapped[list] = mapped_column(JSON, default=list)

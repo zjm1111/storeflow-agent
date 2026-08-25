@@ -182,6 +182,7 @@ class ResearchService:
                     evidence_ids=sorted({eid for event in approved_events for eid in event.get("evidence_ids", [])}),
                     scope=task.get("scope", {}),
                     confidence=min(event.get("confidence", 0.5) for event in approved_events),
+                    kind="episodic",
                 )
             self._audit(task, action, comment, None, "approved")
         elif action == "modify_constraints":

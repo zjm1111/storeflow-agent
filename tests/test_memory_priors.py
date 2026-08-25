@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -121,3 +122,39 @@ def test_memory_catalog_selects_before_loading_content_under_a_separate_budget(m
     assert result["items"][0]["summary"] == "浦东饮料暴雨补货案例"
     assert result["items"][0]["content_truncated"] is True
     assert result["items"][0]["content"].endswith("…")
+
+
+def test_memory_kind_lifecycle_limits_agent_candidates_and_applies_kind_ttl(monkeypatch):
+    _memory_session(monkeypatch)
+    monkeypatch.setattr(memory_module, "get_settings", lambda: type("Settings", (), {
+        "memory_default_ttl_days": 90,
+        "memory_episodic_ttl_days": 30,
+        "memory_semantic_ttl_days": 180,
+        "memory_procedural_ttl_days": 365,
+    })())
+    service = MemoryService()
+
+    episodic = service.create_candidate(
+        workspace_id="demo", content="暴雨配送延迟后的已审核历史案例", evidence_ids=["ev-1"],
+        scope={"region": "上海"}, confidence=0.8,
+    )
+    assert episodic["kind"] == "episodic"
+    with pytest.raises(ValueError, match="kind=episodic"):
+        service.create_candidate(
+            workspace_id="demo", content="中央仓默认服务区域", evidence_ids=["ev-2"],
+            scope={"region": "上海"}, confidence=0.8, kind="semantic",
+        )
+    with pytest.raises(ValueError, match="kind=episodic"):
+        service.create_candidate(
+            workspace_id="demo", content="发生中断必须人工确认", evidence_ids=["ev-3"],
+            scope={"region": "上海"}, confidence=0.8, kind="procedural",
+        )
+
+    procedural = service.create_candidate(
+        workspace_id="demo", content="中央仓确认中断时必须请求采购负责人审核", evidence_ids=["ev-policy"],
+        scope={"region": "上海"}, confidence=0.9, kind="procedural", human_initiated=True,
+    )
+    approved = service.approve(procedural["memory_id"], "reviewer-a")
+    assert approved["kind"] == "procedural"
+    expires_at = datetime.fromisoformat(approved["expires_at"])
+    assert 364 <= (expires_at - datetime.now(timezone.utc)).days <= 365
