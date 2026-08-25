@@ -9,12 +9,7 @@ from __future__ import annotations
 
 
 class MemoryCandidateExtractor:
-    """Build one bounded episodic proposal after a decision approval.
-
-    Atomic multi-candidate extraction is intentionally a later concern.  This
-    first boundary replaces raw RiskEvent concatenation with an explainable
-    eligibility gate and a durable historical-prior formulation.
-    """
+    """Build at most three atomic episodic proposals after decision approval."""
 
     _SCOPE_KEYS = ("region", "warehouse", "store", "category", "sku", "channel")
     _EVENT_LABELS = {
@@ -26,8 +21,11 @@ class MemoryCandidateExtractor:
     }
     _LOW_VALUE_MARKERS = ("traceback", "exception", "tool-call", "http", "redis", "celery", "解析失败", "调用失败", "日志")
 
+    _TYPE_PRIORITY = ("logistics_delay", "inventory_shortage", "demand_surge", "price_volatility", "supply_disruption")
+    _MAX_CANDIDATES = 3
+
     def extract(self, task: dict) -> dict:
-        """Return ``candidate`` plus auditable acceptance/rejection details."""
+        """Return atomic ``candidates`` plus auditable eligibility details."""
         decision = task.get("decision") or {}
         recommended = decision.get("recommended_strategy")
         scope = self._valid_scope(task.get("scope") or {})
@@ -63,27 +61,39 @@ class MemoryCandidateExtractor:
             "fact_boundary": "Temporary quantities, timestamps, raw event summaries, and tool logs are excluded from long-term memory content.",
         }
         if reasons:
-            return {"candidate": None, "validation": validation}
+            return {"candidate": None, "candidates": [], "validation": validation}
 
-        event_types = list(dict.fromkeys(event["event_type"] for event in accepted_events))
-        labels = "、".join(self._EVENT_LABELS[event_type] for event_type in event_types)
-        cited_evidence = sorted({evidence_id for event in accepted_events for evidence_id in event["verified_evidence_ids"]})
-        confidence = min(float(event.get("confidence", 0.5)) for event in accepted_events)
+        grouped: dict[str, list[dict]] = {}
+        for event in accepted_events:
+            grouped.setdefault(event["event_type"], []).append(event)
+        ordered_types = [event_type for event_type in self._TYPE_PRIORITY if event_type in grouped]
+        selected_types = ordered_types[:self._MAX_CANDIDATES]
+        omitted_types = ordered_types[self._MAX_CANDIDATES:]
         scope_label = "、".join(f"{key}={value}" for key, value in scope.items())
-        content = (
-            f"已审核补货历史案例（适用范围：{scope_label}）：当出现{labels}风险且当期证据充分时，"
-            f"应比较单门店、单 SKU、单周期的三种订货策略；本次由采购负责人批准“{recommended}”。"
-            "该条仅作为历史先验，后续任务必须重新核验当前库存、需求、到货与成本证据。"
-        )
-        validation["reusable_pattern"] = {"event_types": event_types, "approved_strategy": recommended}
+        candidates = []
+        for event_type in selected_types:
+            events = grouped[event_type]
+            cited_evidence = sorted({evidence_id for event in events for evidence_id in event["verified_evidence_ids"]})
+            confidence = min(float(event.get("confidence", 0.5)) for event in events)
+            label = self._EVENT_LABELS[event_type]
+            content = (
+                f"已审核补货历史案例（适用范围：{scope_label}）：当出现{label}风险且当期证据充分时，"
+                f"应比较单门店、单 SKU、单周期的三种订货策略；本次由采购负责人批准“{recommended}”。"
+                "该条仅作为历史先验，后续任务必须重新核验当前库存、需求、到货与成本证据。"
+            )
+            candidates.append({
+                "content": content, "evidence_ids": cited_evidence, "scope": scope,
+                "confidence": confidence, "kind": "episodic", "risk_dimension": event_type,
+                "source_event_ids": [event.get("event_id") for event in events],
+            })
+        validation["reusable_pattern"] = {"event_types": selected_types, "approved_strategy": recommended}
+        validation["candidate_count"] = len(candidates)
+        validation["omitted_event_types_due_to_limit"] = omitted_types
         return {
-            "candidate": {
-                "content": content,
-                "evidence_ids": cited_evidence,
-                "scope": scope,
-                "confidence": confidence,
-                "kind": "episodic",
-            },
+            # Keep a first-candidate alias for old task-result clients. New
+            # callers must use ``candidates`` and review each atom independently.
+            "candidate": candidates[0] if candidates else None,
+            "candidates": candidates,
             "validation": validation,
         }
 

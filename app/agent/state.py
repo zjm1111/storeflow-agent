@@ -41,6 +41,7 @@ class ResearchState(TypedDict, total=False):
     situational_memories: list[dict]
     memory_conflicts: list[dict]
     memory_candidate_extraction: dict
+    memory_candidates: list[dict]
     context_pack: dict
     agent_actions: list[dict]
     next_action: dict | None

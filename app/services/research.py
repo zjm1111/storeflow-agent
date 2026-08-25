@@ -177,14 +177,18 @@ class ResearchService:
             # raw RiskEvent summaries never become cross-task memory verbatim.
             extraction = MemoryCandidateExtractor().extract(task)
             task["memory_candidate_extraction"] = extraction["validation"]
-            proposed = extraction["candidate"]
-            if proposed:
-                task["memory_candidate"] = MemoryService().create_candidate(
+            proposed_items = extraction["candidates"]
+            task["memory_candidates"] = [
+                MemoryService().create_candidate(
                     workspace_id=task.get("workspace_id", "demo"),
                     content=proposed["content"], evidence_ids=proposed["evidence_ids"],
                     scope=proposed["scope"], confidence=proposed["confidence"], kind=proposed["kind"],
                     origin_task_id=task_id,
                 )
+                for proposed in proposed_items
+            ]
+            # Compatibility for clients written before atomic candidate support.
+            task["memory_candidate"] = task["memory_candidates"][0] if task["memory_candidates"] else None
             self._audit(task, action, comment, None, "approved")
         elif action == "modify_constraints":
             decision = task.get("decision") or {}
