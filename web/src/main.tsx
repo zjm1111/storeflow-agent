@@ -1,47 +1,319 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import "./styles.css";
 
-type Trace = { node: string; status: "started" | "completed" | "error"; timestamp: string; message?: string };
-type HybridResult = { source_id: string; title: string; url: string; bm25_score: number; vector_score: number; rrf_score?: number; rerank_score: number };
-type Strategy = { strategy: string; replenishment_quantity: number; stockout_probability: number; delay_probability: number; service_level: number; expected_total_cost: number; risk_profile?: string; service_target?: number; objective_score?: number; constraint_feasible?: boolean };
-type FeasibilitySummary = { target_service_level: number; max_achievable_service_level: number; max_replenishment_quantity: number; blocking_constraints: string[]; remediation_options: string[] };
-type Decision = { seed: number; samples: number; recommended_strategy: string | null; infeasibility_reason: string | null; applied_constraints: Record<string, number>; strategies: Strategy[]; feasibility_summary?: FeasibilitySummary };
-type MemoryItem = { memory_id: string; status: "candidate" | "approved" | "rejected" | "superseded" | "expired"; kind?: string; summary?: string; content: string; content_loaded?: boolean; content_truncated?: boolean; content_token_estimate?: number; evidence_ids: string[]; scope: Record<string, string>; confidence: number; reviewed_by?: string | null; reviewed_at?: string | null; review_action?: string | null; review_comment?: string | null; origin_task_id?: string | null; content_hash?: string | null; revision?: number; possible_duplicate_of?: string | null; conflicts_with?: string[]; expires_at?: string | null; supersedes_id?: string | null };
-type MemoryCandidateExtraction = { status: "accepted" | "rejected"; reasons: string[]; accepted_event_ids: string[]; rejected_events: { event_id: string; reason: string }[]; fact_boundary: string };
-type ContextPack = { budget_tokens: number; used_tokens: number; max_items: number; items: { evidence_id: string; source_id: string; summary: string; overall_score: number }[] };
-type Result = { evidence: { evidence_id: string; source_id: string; quote: string; overall_score: number; conflict_status?: "none" | "pending_review" }[]; events: { event_type: string; severity: string; summary: string; evidence_ids: string[] }[]; report: { markdown: string } | null; final_report?: { markdown: string } | null; audit_trail?: { action: string; comment?: string | null; timestamp: string }[]; coverage: Record<string, number>; errors: string[]; search_count: number; max_search: number; max_loop: number; checkpoint: { node: string; version: number }; decision?: Decision; evidence_context_pack?: ContextPack; context_pack?: ContextPack; working_memory?: { queries?: string[]; coverage_gaps?: string[]; selected_evidence_ids?: string[]; context_summary?: string; parallel_retrieval?: { mode?: string; lanes?: string[]; completed_lanes?: string[]; duration_ms?: number } }; hybrid_results?: (HybridResult & { candidate_id?: string; candidate_type?: string; rrf_lanes?: string[] })[]; situational_memories?: { task_id: string; question: string; events: unknown[]; decision?: { recommended_strategy?: string } | null; created_at: string }[]; recalled_memories?: MemoryItem[]; memory_conflicts?: { memory_id: string; reason: string }[]; memory_candidate?: MemoryItem; memory_candidates?: MemoryItem[]; memory_candidate_extraction?: MemoryCandidateExtraction; agent_actions?: { tool: string; reason?: string; status: string; observation?: string }[] };
-type RuntimeResult = Result & { token_usage?: number; estimated_cost_usd?: number; model_execution?: { provider?: string; model?: string; mode?: string; enabled?: boolean; success?: boolean; reason?: string; total_tokens?: number; latency_ms?: number; estimated_cost_usd?: number; cost_estimate_status?: string }[]; dependency_execution?: { duration_ms?: number; lane_duration_ms?: Record<string, number>; tavily?: { configured?: boolean; request_count?: number; returned_sources?: number; status?: string; estimated_cost_usd?: number; cost_estimate_status?: string } } };
-type Task = { task_id: string; status: string; trace: Trace[]; result?: Result };
+type Trace = {
+  node: string;
+  status: "started" | "completed" | "error";
+  timestamp: string;
+  message?: string;
+};
+type HybridResult = {
+  source_id: string;
+  title: string;
+  url: string;
+  bm25_score: number;
+  vector_score: number;
+  rrf_score?: number;
+  rerank_score: number;
+};
+type Strategy = {
+  strategy: string;
+  replenishment_quantity: number;
+  stockout_probability: number;
+  delay_probability: number;
+  service_level: number;
+  expected_total_cost: number;
+  risk_profile?: string;
+  service_target?: number;
+  objective_score?: number;
+  constraint_feasible?: boolean;
+};
+type FeasibilitySummary = {
+  target_service_level: number;
+  max_achievable_service_level: number;
+  max_replenishment_quantity: number;
+  blocking_constraints: string[];
+  remediation_options: string[];
+};
+type Decision = {
+  seed: number;
+  samples: number;
+  recommended_strategy: string | null;
+  infeasibility_reason: string | null;
+  applied_constraints: Record<string, number>;
+  strategies: Strategy[];
+  feasibility_summary?: FeasibilitySummary;
+};
+type MemoryItem = {
+  memory_id: string;
+  status: "candidate" | "approved" | "rejected" | "superseded" | "expired";
+  kind?: string;
+  summary?: string;
+  content: string;
+  content_loaded?: boolean;
+  content_truncated?: boolean;
+  content_token_estimate?: number;
+  evidence_ids: string[];
+  scope: Record<string, string>;
+  confidence: number;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  review_action?: string | null;
+  review_comment?: string | null;
+  origin_task_id?: string | null;
+  content_hash?: string | null;
+  revision?: number;
+  possible_duplicate_of?: string | null;
+  conflicts_with?: string[];
+  expires_at?: string | null;
+  supersedes_id?: string | null;
+};
+type MemoryCandidateExtraction = {
+  status: "accepted" | "rejected";
+  reasons: string[];
+  accepted_event_ids: string[];
+  rejected_events: { event_id: string; reason: string }[];
+  fact_boundary: string;
+};
+type ContextPack = {
+  budget_tokens: number;
+  used_tokens: number;
+  max_items: number;
+  items: {
+    evidence_id: string;
+    source_id: string;
+    summary: string;
+    overall_score: number;
+  }[];
+};
+type Hypothesis = {
+  hypothesis_id: string;
+  status: "unknown" | "supported" | "refuted" | "conflicting";
+  confidence: number;
+  evidence_ids: string[];
+  analysis_ids: string[];
+  missing_information: string[];
+  reason: string;
+};
+type AnalysisResult = {
+  analysis_id: string;
+  metric: string;
+  baseline?: number;
+  current?: number;
+  change_ratio?: number;
+  anomaly: boolean;
+  severity: string;
+  summary: string;
+};
+type AnalysisSnapshot = {
+  dataset: string;
+  description: string;
+  series: {
+    date: string;
+    sales: number;
+    inventory: number;
+    promotion_flag: boolean;
+    lead_time: number;
+    delivery_delay: number;
+  }[];
+  results: AnalysisResult[];
+};
+type Result = {
+  evidence: {
+    evidence_id: string;
+    source_id: string;
+    quote: string;
+    overall_score: number;
+    conflict_status?: "none" | "pending_review";
+  }[];
+  events: {
+    event_type: string;
+    severity: string;
+    summary: string;
+    evidence_ids: string[];
+  }[];
+  report: { markdown: string } | null;
+  final_report?: { markdown: string } | null;
+  audit_trail?: {
+    action: string;
+    comment?: string | null;
+    timestamp: string;
+  }[];
+  coverage: Record<string, number>;
+  errors: string[];
+  search_count: number;
+  max_search: number;
+  max_loop: number;
+  checkpoint: { node: string; version: number };
+  decision?: Decision;
+  hypotheses?: Hypothesis[];
+  analysis_snapshot?: AnalysisSnapshot;
+  investigation_status?: {
+    ready_for_decision: boolean;
+    degraded?: boolean;
+    missing_information: string[];
+    summary: string;
+  };
+  unresolved_conflicts?: {
+    group?: string;
+    evidence_id?: string;
+    source_id?: string;
+  }[];
+  evidence_context_pack?: ContextPack;
+  context_pack?: ContextPack;
+  working_memory?: {
+    queries?: string[];
+    coverage_gaps?: string[];
+    selected_evidence_ids?: string[];
+    context_summary?: string;
+    parallel_retrieval?: {
+      mode?: string;
+      lanes?: string[];
+      completed_lanes?: string[];
+      duration_ms?: number;
+    };
+  };
+  hybrid_results?: (HybridResult & {
+    candidate_id?: string;
+    candidate_type?: string;
+    rrf_lanes?: string[];
+  })[];
+  situational_memories?: {
+    task_id: string;
+    question: string;
+    events: unknown[];
+    decision?: { recommended_strategy?: string } | null;
+    created_at: string;
+  }[];
+  recalled_memories?: MemoryItem[];
+  memory_conflicts?: { memory_id: string; reason: string }[];
+  memory_candidate?: MemoryItem;
+  memory_candidates?: MemoryItem[];
+  memory_candidate_extraction?: MemoryCandidateExtraction;
+  agent_actions?: {
+    tool: string;
+    focus?: string;
+    reason?: string;
+    status: string;
+    observation?: string;
+  }[];
+};
+type RuntimeResult = Result & {
+  token_usage?: number;
+  estimated_cost_usd?: number;
+  model_execution?: {
+    provider?: string;
+    model?: string;
+    mode?: string;
+    enabled?: boolean;
+    success?: boolean;
+    reason?: string;
+    total_tokens?: number;
+    latency_ms?: number;
+    estimated_cost_usd?: number;
+    cost_estimate_status?: string;
+  }[];
+  dependency_execution?: {
+    duration_ms?: number;
+    lane_duration_ms?: Record<string, number>;
+    tavily?: {
+      configured?: boolean;
+      request_count?: number;
+      returned_sources?: number;
+      status?: string;
+      estimated_cost_usd?: number;
+      cost_estimate_status?: string;
+    };
+  };
+};
+type Task = {
+  task_id: string;
+  status: string;
+  trace: Trace[];
+  result?: Result;
+};
 
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? "/api";
 const steps = ["initialize", "agent_decide_next_action", "agent_execute_tool"];
-const labels: Record<string, string> = { initialize: "初始化门店任务", agent_decide_next_action: "ReAct Manager 选择动作", agent_execute_tool: "执行复合受限工具" };
-const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
-const money = (value: number) => new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", maximumFractionDigits: 0 }).format(value);
-const statusText = (status?: string) => ({ queued: "排队中", running: "研究中", completed: "决策收尾中", awaiting_review: "等待审核", approved: "已批准", rejected: "已拒绝" }[status ?? ""] ?? status ?? "尚未开始");
-const terminalStatuses = new Set(["completed", "awaiting_review", "approved", "rejected"]);
-const numericFields = [
-  ["current_inventory", "当前库存", "件"], ["demand_mean", "日均销量", "件/日"],
-  ["lead_time_days", "中央仓提前期", "天"], ["budget", "本次预算", "元"],
-  ["max_replenishment", "最大订货量", "件"], ["target_service_level", "目标服务水平", "0–1"],
-  ["purchase_cost", "采购单价", "元/件"], ["holding_cost", "库存持有成本", "元/件"],
-  ["stockout_cost", "缺货成本", "元/件"], ["expedite_cost", "加急履约成本", "元/件"],
-] as const;
-const defaultBusinessInputs: Record<(typeof numericFields)[number][0], string> = {
-  current_inventory: "80", demand_mean: "96", lead_time_days: "2", budget: "1500", max_replenishment: "200",
-  target_service_level: "0.92", purchase_cost: "10", holding_cost: "0.5", stockout_cost: "25", expedite_cost: "8",
+const labels: Record<string, string> = {
+  initialize: "初始化门店任务",
+  agent_decide_next_action: "ReAct Manager 选择动作",
+  agent_execute_tool: "执行复合受限工具",
 };
+const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
+const money = (value: number) =>
+  new Intl.NumberFormat("zh-CN", {
+    style: "currency",
+    currency: "CNY",
+    maximumFractionDigits: 0,
+  }).format(value);
+const statusText = (status?: string) =>
+  ({
+    queued: "排队中",
+    running: "研究中",
+    completed: "决策收尾中",
+    awaiting_review: "等待审核",
+    approved: "已批准",
+    rejected: "已拒绝",
+  })[status ?? ""] ??
+  status ??
+  "尚未开始";
+const terminalStatuses = new Set([
+  "completed",
+  "awaiting_review",
+  "approved",
+  "rejected",
+]);
+const numericFields = [
+  ["current_inventory", "当前库存", "件"],
+  ["demand_mean", "日均销量", "件/日"],
+  ["lead_time_days", "中央仓提前期", "天"],
+  ["budget", "本次预算", "元"],
+  ["max_replenishment", "最大订货量", "件"],
+  ["target_service_level", "目标服务水平", "0–1"],
+  ["purchase_cost", "采购单价", "元/件"],
+  ["holding_cost", "库存持有成本", "元/件"],
+  ["stockout_cost", "缺货成本", "元/件"],
+  ["expedite_cost", "加急履约成本", "元/件"],
+] as const;
+const defaultBusinessInputs: Record<(typeof numericFields)[number][0], string> =
+  {
+    current_inventory: "80",
+    demand_mean: "96",
+    lead_time_days: "2",
+    budget: "1500",
+    max_replenishment: "200",
+    target_service_level: "0.92",
+    purchase_cost: "10",
+    holding_cost: "0.5",
+    stockout_cost: "25",
+    expedite_cost: "8",
+  };
 
 function App() {
-  const [question, setQuestion] = useState("本周末暴雨叠加饮料促销，上海浦东门店当前库存只够 1.5 天，应订多少？");
+  const [question, setQuestion] = useState(
+    "上海浦东门店瓶装饮料近期出现缺货风险，请调查促销、库存和中央仓配送是否构成主要风险，并给出本周期补货建议。",
+  );
   const [store, setStore] = useState("上海浦东门店");
   const [sku, setSku] = useState("瓶装饮料");
   const [businessInputs, setBusinessInputs] = useState(defaultBusinessInputs);
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
-  const [view, setView] = useState<"overview" | "workflow" | "evidence" | "memory" | "review">("overview");
+  const [view, setView] = useState<
+    "overview" | "workflow" | "analysis" | "evidence" | "memory" | "review"
+  >("overview");
   const [selectedEvidence, setSelectedEvidence] = useState<string | null>(null);
   const [pdf, setPdf] = useState<File | null>(null);
   const [uploadMessage, setUploadMessage] = useState("");
@@ -52,23 +324,72 @@ function App() {
   const [replacementText, setReplacementText] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [accessToken, setAccessToken] = useState(() => localStorage.getItem("supplymind_access_token") ?? "");
+  const [accessToken, setAccessToken] = useState(
+    () => localStorage.getItem("supplymind_access_token") ?? "",
+  );
   const result = task?.result as RuntimeResult | undefined;
-  const riskScore = useMemo(() => Math.min(100, Math.round((result?.events ?? []).reduce((sum, item) => sum + ({ critical: 38, high: 26, medium: 15, low: 8 }[item.severity.toLowerCase()] ?? 12), 0))), [result]);
-  const best = result?.decision?.recommended_strategy ? result.decision.strategies.find(item => item.strategy === result.decision?.recommended_strategy) : undefined;
-  const selected = result?.evidence.find(item => item.evidence_id === selectedEvidence) ?? result?.evidence[0];
+  const riskScore = useMemo(
+    () =>
+      Math.min(
+        100,
+        Math.round(
+          (result?.events ?? []).reduce(
+            (sum, item) =>
+              sum +
+              ({ critical: 38, high: 26, medium: 15, low: 8 }[
+                item.severity.toLowerCase()
+              ] ?? 12),
+            0,
+          ),
+        ),
+      ),
+    [result],
+  );
+  const best = result?.decision?.recommended_strategy
+    ? result.decision.strategies.find(
+        (item) => item.strategy === result.decision?.recommended_strategy,
+      )
+    : undefined;
+  const selected =
+    result?.evidence.find((item) => item.evidence_id === selectedEvidence) ??
+    result?.evidence[0];
   const modelCalls = result?.model_execution ?? [];
   const dependency = result?.dependency_execution;
-  const remoteModelCalls = modelCalls.filter(item => item.mode === "remote" && item.success !== false);
-  const modelDegradations = modelCalls.filter(item => item.success === false || item.mode === "deterministic-fallback");
-  const moneyUsd = (value?: number) => value ? `$${value.toFixed(4)}` : "费率未配置";
-  const mergeTrace = (current: Trace[], incoming: Trace) => Array.from(new Map([...current, incoming].map(item => [`${item.timestamp}:${item.node}:${item.status}`, item])).values()).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const authHeaders = (): Record<string, string> => accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+  const remoteModelCalls = modelCalls.filter(
+    (item) => item.mode === "remote" && item.success !== false,
+  );
+  const modelDegradations = modelCalls.filter(
+    (item) => item.success === false || item.mode === "deterministic-fallback",
+  );
+  const moneyUsd = (value?: number) =>
+    value ? `$${value.toFixed(4)}` : "费率未配置";
+  const mergeTrace = (current: Trace[], incoming: Trace) =>
+    Array.from(
+      new Map(
+        [...current, incoming].map((item) => [
+          `${item.timestamp}:${item.node}:${item.status}`,
+          item,
+        ]),
+      ).values(),
+    ).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const authHeaders = (): Record<string, string> =>
+    accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
   const fetchTaskResult = async (taskId: string) => {
-    const response = await fetch(`${apiBase}/tasks/${taskId}/result`, { headers: authHeaders() });
+    const response = await fetch(`${apiBase}/tasks/${taskId}/result`, {
+      headers: authHeaders(),
+    });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail ?? "任务刷新失败");
-    setTask(current => current?.task_id === taskId ? { ...current, status: body.status, trace: body.trace ?? current.trace, result: body } : current);
+    setTask((current) =>
+      current?.task_id === taskId
+        ? {
+            ...current,
+            status: body.status,
+            trace: body.trace ?? current.trace,
+            result: body,
+          }
+        : current,
+    );
     return body;
   };
   // SSE is the fast path. Polling keeps state correct after reconnects and
@@ -77,60 +398,1483 @@ function App() {
     if (!task || terminalStatuses.has(task.status)) return;
     let cancelled = false;
     const poll = async () => {
-      try { if (!cancelled) await fetchTaskResult(task.task_id); }
-      catch (reason) { if (!cancelled) setError(reason instanceof Error ? reason.message : "任务状态同步失败"); }
+      try {
+        if (!cancelled) await fetchTaskResult(task.task_id);
+      } catch (reason) {
+        if (!cancelled)
+          setError(
+            reason instanceof Error ? reason.message : "任务状态同步失败",
+          );
+      }
     };
     void poll();
     const timer = window.setInterval(() => void poll(), 2000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [task?.task_id, task?.status, accessToken]);
   async function consumeAuthenticatedEvents(taskId: string) {
-    const response = await fetch(`${apiBase}/tasks/${taskId}/events`, { headers: authHeaders() });
+    const response = await fetch(`${apiBase}/tasks/${taskId}/events`, {
+      headers: authHeaders(),
+    });
     if (!response.ok || !response.body) throw new Error("无法建立任务事件流");
-    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
-    while (true) { const { value, done } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const blocks = buffer.split("\n\n"); buffer = blocks.pop() ?? ""; for (const block of blocks) { const eventType = block.match(/^event: (.+)$/m)?.[1]; const raw = block.match(/^data: (.+)$/m)?.[1]; if (!eventType || !raw) continue; const event = JSON.parse(raw); if (eventType === "trace") setTask(current => current ? { ...current, trace: mergeTrace(current.trace, event.payload) } : current); if (eventType === "task") { setTask(current => current ? { ...current, status: event.payload.status } : current); if (["completed", "awaiting_review", "approved", "rejected"].includes(event.payload.status)) { await refreshTask(); return; } } } }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop() ?? "";
+      for (const block of blocks) {
+        const eventType = block.match(/^event: (.+)$/m)?.[1];
+        const raw = block.match(/^data: (.+)$/m)?.[1];
+        if (!eventType || !raw) continue;
+        const event = JSON.parse(raw);
+        if (eventType === "trace")
+          setTask((current) =>
+            current
+              ? { ...current, trace: mergeTrace(current.trace, event.payload) }
+              : current,
+          );
+        if (eventType === "task") {
+          setTask((current) =>
+            current ? { ...current, status: event.payload.status } : current,
+          );
+          if (
+            ["completed", "awaiting_review", "approved", "rejected"].includes(
+              event.payload.status,
+            )
+          ) {
+            await refreshTask();
+            return;
+          }
+        }
+      }
+    }
   }
-  async function login() { setError(""); try { const response = await fetch(`${apiBase}/auth/token`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) }); const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? "登录失败"); localStorage.setItem("supplymind_access_token", body.access_token); setAccessToken(body.access_token); setPassword(""); } catch (reason) { setError(reason instanceof Error ? reason.message : "登录失败"); } }
+  async function login() {
+    setError("");
+    try {
+      const response = await fetch(`${apiBase}/auth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "登录失败");
+      localStorage.setItem("supplymind_access_token", body.access_token);
+      setAccessToken(body.access_token);
+      setPassword("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "登录失败");
+    }
+  }
 
   async function submit(event: FormEvent) {
-    event.preventDefault(); setError(""); setCreating(true); setTask(null); setView("workflow");
+    event.preventDefault();
+    setError("");
+    setCreating(true);
+    setTask(null);
+    setView("workflow");
     try {
-      const constraints = Object.fromEntries(Object.entries(businessInputs).map(([name, value]) => [name, Number(value)]));
-      if (Object.values(constraints).some(value => !Number.isFinite(value) || value < 0) || constraints.target_service_level > 1) throw new Error("请填写有效的非负运营参数；目标服务水平应在 0 到 1 之间。");
-      const response = await fetch(`${apiBase}/tasks`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ question, scope: { region: "上海", store, warehouse: "华东中央仓", category: "快消饮料", sku, time_window: "week" }, constraints }) });
+      const constraints = Object.fromEntries(
+        Object.entries(businessInputs).map(([name, value]) => [
+          name,
+          Number(value),
+        ]),
+      );
+      if (
+        Object.values(constraints).some(
+          (value) => !Number.isFinite(value) || value < 0,
+        ) ||
+        constraints.target_service_level > 1
+      )
+        throw new Error(
+          "请填写有效的非负运营参数；目标服务水平应在 0 到 1 之间。",
+        );
+      const response = await fetch(`${apiBase}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({
+          question,
+          scope: {
+            region: "上海",
+            store,
+            warehouse: "华东中央仓",
+            category: "快消饮料",
+            sku,
+            time_window: "week",
+          },
+          constraints,
+        }),
+      });
       if (!response.ok) throw new Error(`任务创建失败（${response.status}）`);
-      const created: Task = await response.json(); setTask(created);
+      const created: Task = await response.json();
+      setTask(created);
       // Native EventSource cannot attach Authorization; JWT mode uses fetch
       // streaming with the Bearer header while local demo keeps EventSource.
-      if (accessToken) { void consumeAuthenticatedEvents(created.task_id).catch(reason => setError(reason instanceof Error ? reason.message : "任务流中断")); return; }
-      const stream = new EventSource(`${apiBase}/tasks/${created.task_id}/events`);
-      stream.addEventListener("trace", message => { const event = JSON.parse((message as MessageEvent).data); setTask(current => current ? { ...current, trace: mergeTrace(current.trace, event.payload) } : current); });
-      stream.addEventListener("task", message => { const event = JSON.parse((message as MessageEvent).data); setTask(current => current ? { ...current, status: event.payload.status } : current); if (terminalStatuses.has(event.payload.status)) { stream.close(); void fetchTaskResult(created.task_id); } });
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法创建任务"); } finally { setCreating(false); }
+      if (accessToken) {
+        void consumeAuthenticatedEvents(created.task_id).catch((reason) =>
+          setError(reason instanceof Error ? reason.message : "任务流中断"),
+        );
+        return;
+      }
+      const stream = new EventSource(
+        `${apiBase}/tasks/${created.task_id}/events`,
+      );
+      stream.addEventListener("trace", (message) => {
+        const event = JSON.parse((message as MessageEvent).data);
+        setTask((current) =>
+          current
+            ? { ...current, trace: mergeTrace(current.trace, event.payload) }
+            : current,
+        );
+      });
+      stream.addEventListener("task", (message) => {
+        const event = JSON.parse((message as MessageEvent).data);
+        setTask((current) =>
+          current ? { ...current, status: event.payload.status } : current,
+        );
+        if (terminalStatuses.has(event.payload.status)) {
+          stream.close();
+          void fetchTaskResult(created.task_id);
+        }
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法创建任务");
+    } finally {
+      setCreating(false);
+    }
   }
-  async function refreshTask() { if (!task) return; await fetchTaskResult(task.task_id); }
-  async function runDecision() { if (!task) return; setError(""); try { const response = await fetch(`${apiBase}/tasks/${task.task_id}/decision`, { method: "POST", headers: authHeaders() }); const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? "决策计算失败"); await refreshTask(); setView("review"); } catch (reason) { setError(reason instanceof Error ? reason.message : "决策计算失败"); } }
-  async function review(action: "approve" | "modify-constraints" | "need-more-evidence" | "reject") { if (!task) return; setError(""); try { const constraints = action === "modify-constraints" ? JSON.parse(constraintText) : undefined; const response = await fetch(`${apiBase}/tasks/${task.task_id}/review/${action}`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ comment: reviewComment || null, constraints }) }); const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? "审核操作失败"); setTask(current => current ? { ...current, status: body.status, result: { ...(current.result ?? {} as Result), ...body } as Result } : current); await fetchTaskResult(task.task_id); } catch (reason) { setError(reason instanceof Error ? reason.message : "审核操作失败"); } }
-  async function uploadPdf() { if (!pdf) { setUploadMessage("请先选择一份 PDF。"); return; } try { const response = await fetch(`${apiBase}/tasks/knowledge/upload`, { method: "POST", headers: { "Content-Type": "application/pdf", "X-Filename": encodeURIComponent(pdf.name), ...authHeaders() }, body: pdf }); const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? "PDF 上传失败"); setUploadMessage(body.duplicate ? `知识库已包含 ${body.source.title}` : `已导入 ${body.source.title}`); } catch (reason) { setUploadMessage(reason instanceof Error ? reason.message : "PDF 上传失败"); } }
-  async function searchKnowledge(event: FormEvent) { event.preventDefault(); if (knowledgeQuery.trim().length < 3) return; try { const response = await fetch(`${apiBase}/tasks/knowledge/search`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ query: knowledgeQuery }) }); const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? "知识库搜索失败"); setKnowledgeResults(body.results); } catch (reason) { setUploadMessage(reason instanceof Error ? reason.message : "知识库搜索失败"); } }
-  async function memoryAction(memory: MemoryItem, action: "approve" | "reject" | "expire" | "supersede") { setError(""); try { const body = action === "supersede" ? { replacement_content: replacementText } : { comment: reviewComment || null }; if (action === "supersede" && !replacementText.trim()) throw new Error("请填写替换后的记忆内容"); if (action === "reject" && reviewComment.trim().length < 3) throw new Error("请填写至少 3 个字符的驳回原因"); const response = await fetch(`${apiBase}/memories/${memory.memory_id}/${action}`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify(body) }); const updated = await response.json(); if (!response.ok) throw new Error(updated.detail ?? "记忆审核操作失败"); setReplacementText(""); if (action !== "supersede") setTask(current => { if (!current?.result) return current; const candidates = (current.result.memory_candidates ?? []).map(item => item.memory_id === updated.memory_id ? updated : item); return { ...current, result: { ...current.result, memory_candidates: candidates, memory_candidate: current.result.memory_candidate?.memory_id === updated.memory_id ? updated : current.result.memory_candidate } }; }); } catch (reason) { setError(reason instanceof Error ? reason.message : "记忆审核操作失败"); } }
+  async function refreshTask() {
+    if (!task) return;
+    await fetchTaskResult(task.task_id);
+  }
+  async function runDecision() {
+    if (!task) return;
+    setError("");
+    try {
+      const response = await fetch(
+        `${apiBase}/tasks/${task.task_id}/decision`,
+        { method: "POST", headers: authHeaders() },
+      );
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "决策计算失败");
+      await refreshTask();
+      setView("review");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "决策计算失败");
+    }
+  }
+  async function review(
+    action: "approve" | "modify-constraints" | "need-more-evidence" | "reject",
+  ) {
+    if (!task) return;
+    setError("");
+    try {
+      const constraints =
+        action === "modify-constraints"
+          ? JSON.parse(constraintText)
+          : undefined;
+      const response = await fetch(
+        `${apiBase}/tasks/${task.task_id}/review/${action}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ comment: reviewComment || null, constraints }),
+        },
+      );
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "审核操作失败");
+      setTask((current) =>
+        current
+          ? {
+              ...current,
+              status: body.status,
+              result: {
+                ...(current.result ?? ({} as Result)),
+                ...body,
+              } as Result,
+            }
+          : current,
+      );
+      await fetchTaskResult(task.task_id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "审核操作失败");
+    }
+  }
+  async function uploadPdf() {
+    if (!pdf) {
+      setUploadMessage("请先选择一份 PDF。");
+      return;
+    }
+    try {
+      const response = await fetch(`${apiBase}/tasks/knowledge/upload`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/pdf",
+          "X-Filename": encodeURIComponent(pdf.name),
+          ...authHeaders(),
+        },
+        body: pdf,
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "PDF 上传失败");
+      setUploadMessage(
+        body.duplicate
+          ? `知识库已包含 ${body.source.title}`
+          : `已导入 ${body.source.title}`,
+      );
+    } catch (reason) {
+      setUploadMessage(
+        reason instanceof Error ? reason.message : "PDF 上传失败",
+      );
+    }
+  }
+  async function searchKnowledge(event: FormEvent) {
+    event.preventDefault();
+    if (knowledgeQuery.trim().length < 3) return;
+    try {
+      const response = await fetch(`${apiBase}/tasks/knowledge/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ query: knowledgeQuery }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail ?? "知识库搜索失败");
+      setKnowledgeResults(body.results);
+    } catch (reason) {
+      setUploadMessage(
+        reason instanceof Error ? reason.message : "知识库搜索失败",
+      );
+    }
+  }
+  async function memoryAction(
+    memory: MemoryItem,
+    action: "approve" | "reject" | "expire" | "supersede",
+  ) {
+    setError("");
+    try {
+      const body =
+        action === "supersede"
+          ? { replacement_content: replacementText }
+          : { comment: reviewComment || null };
+      if (action === "supersede" && !replacementText.trim())
+        throw new Error("请填写替换后的记忆内容");
+      if (action === "reject" && reviewComment.trim().length < 3)
+        throw new Error("请填写至少 3 个字符的驳回原因");
+      const response = await fetch(
+        `${apiBase}/memories/${memory.memory_id}/${action}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify(body),
+        },
+      );
+      const updated = await response.json();
+      if (!response.ok) throw new Error(updated.detail ?? "记忆审核操作失败");
+      setReplacementText("");
+      if (action !== "supersede")
+        setTask((current) => {
+          if (!current?.result) return current;
+          const candidates = (current.result.memory_candidates ?? []).map(
+            (item) => (item.memory_id === updated.memory_id ? updated : item),
+          );
+          return {
+            ...current,
+            result: {
+              ...current.result,
+              memory_candidates: candidates,
+              memory_candidate:
+                current.result.memory_candidate?.memory_id === updated.memory_id
+                  ? updated
+                  : current.result.memory_candidate,
+            },
+          };
+        });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "记忆审核操作失败");
+    }
+  }
 
-  return <div className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark">S</span><div><strong>StoreFlow</strong><small>RETAIL DECISION AGENT</small></div></div><nav>{([ ["overview", "概览", "⌘"], ["workflow", "Agent 工作流", "◌"], ["evidence", "证据中心", "◇"], ["memory", "记忆与上下文", "◫"], ["review", "采购审核", "✓"] ] as const).map(([key, name, icon]) => <button key={key} className={`nav-item ${view === key ? "active" : ""}`} onClick={() => setView(key)}><span>{icon}</span>{name}{key === "review" && task?.status === "awaiting_review" ? <i /> : null}</button>)}</nav><div className="sidebar-footer"><div className="system-dot" /><span>系统在线</span><small>单周期演示环境</small></div></aside>
-    <main className="dashboard"><header className="topbar"><div><p className="eyebrow">连锁零售补货决策</p><h1>门店订货风险控制台</h1></div><div className="top-actions"><span className="live-pill"><b /> {accessToken ? "JWT 已登录" : "本地演示身份"}</span><input aria-label="用户名" value={username} onChange={event => setUsername(event.target.value)} placeholder="用户名" /><input aria-label="密码" value={password} onChange={event => setPassword(event.target.value)} type="password" placeholder="密码" /><button className="secondary-button" onClick={login} disabled={!username || !password}>登录</button><button className="icon-button" title="刷新任务" onClick={refreshTask} disabled={!task}>↻</button><div className="avatar">SF</div></div></header>
-      {error && <div className="alert"><span>!</span><div><strong>操作未完成</strong><p>{error}</p></div><button onClick={() => setError("")}>×</button></div>}
-      <section className="hero-grid"><div className="new-task card"><div className="section-heading"><div><p className="eyebrow">NEW PURCHASE DRAFT</p><h2>创建门店补货任务</h2></div><span className="badge neutral">Bounded Agent</span></div><form onSubmit={submit}><label htmlFor="question">描述采购决策问题</label><textarea id="question" value={question} onChange={event => setQuestion(event.target.value)} minLength={5} required /><div className="form-foot"><input aria-label="门店" value={store} onChange={event => setStore(event.target.value)} placeholder="目标门店" /><input aria-label="SKU" value={sku} onChange={event => setSku(event.target.value)} placeholder="品类或 SKU" /></div><div className="business-inputs"><div><strong>运营参数</strong><small>不上传资料时，这些手动输入即为仿真的业务假设；上传 PDF 后会与 RAG 证据共同使用。</small></div><div className="business-input-grid">{numericFields.map(([name, label, unit]) => <label key={name}>{label}<span>{unit}</span><input type="number" step={name === "target_service_level" || name === "holding_cost" ? "0.01" : "1"} min="0" value={businessInputs[name]} onChange={event => setBusinessInputs(current => ({ ...current, [name]: event.target.value }))} /></label>)}</div></div><div className="form-foot"><span>Agent 仅检索、分析和生成采购草案；不会创建采购单或修改库存。</span><button className="primary-button" disabled={creating}>{creating ? "正在启动…" : "生成订货建议  →"}</button></div></form></div><div className="risk-hero card"><div className="section-heading"><div><p className="eyebrow">RISK POSTURE</p><h2>当前补货风险</h2></div><span className={`badge ${riskScore >= 50 ? "danger" : riskScore ? "warning" : "neutral"}`}>{riskScore >= 50 ? "需要采购关注" : riskScore ? "持续观察" : "等待信号"}</span></div><div className="score"><strong>{riskScore || "—"}</strong><span>/100</span></div><div className="score-bar"><i style={{ width: `${riskScore}%` }} /></div><p>{result ? `${result.events.length} 个已识别风险事件，覆盖库存、需求、到货和成本。` : "创建任务后，在此查看门店缺货与到货风险。"}</p></div></section>
-      <section className="kpi-grid"><Metric label="任务状态" value={statusText(task?.status)} caption={task ? `ID ${task.task_id.slice(0, 8)}` : "尚无进行中的任务"} tone={task?.status === "awaiting_review" ? "amber" : "blue"} /><Metric label="证据可信度" value={result?.evidence.length ? `${Math.round((result.evidence.reduce((sum, item) => sum + item.overall_score, 0) / result.evidence.length) * 100)}%` : "—"} caption={result ? `${result.evidence.length} 条可追溯证据` : "等待证据输入"} tone="mint" /><Metric label="建议补货量" value={best ? `${best.replenishment_quantity}` : "—"} caption={best ? best.strategy : "尚未运行优化"} tone="blue" /><Metric label="预期服务水平" value={best ? percent(best.service_level) : "—"} caption={best ? `成本 ${money(best.expected_total_cost)}` : "等待决策计算"} tone="violet" /></section>
-      <section className="runtime-grid"><article className="card runtime-card"><div className="section-heading"><div><p className="eyebrow">MODEL OBSERVABILITY</p><h2>模型与成本</h2></div><span className={`badge ${modelDegradations.length ? "warning" : "neutral"}`}>{remoteModelCalls.length ? `${remoteModelCalls.length} 次远程调用` : "确定性模式"}</span></div><div className="runtime-stats"><span><b>{result?.token_usage ?? 0}</b> tokens</span><span><b>{moneyUsd(result?.estimated_cost_usd)}</b> 模型估算</span><span><b>{remoteModelCalls.reduce((sum, item) => sum + (item.latency_ms ?? 0), 0).toFixed(0)} ms</b> 远程耗时</span></div>{modelCalls.length ? <div className="runtime-list">{modelCalls.map((item, index) => <div key={`${item.model ?? item.provider}-${index}`}><strong>{item.model ?? item.provider ?? "百炼"}</strong><span>{item.mode === "remote" ? "remote" : "确定性降级"} · {item.total_tokens ?? 0} tokens</span><small>{item.reason ?? (item.cost_estimate_status === "rate_not_configured" ? "未配置本地价格表，不虚构成本" : `成本 ${moneyUsd(item.estimated_cost_usd)}`)}</small></div>)}</div> : <p className="runtime-empty">任务完成后显示模型调用、token、耗时与成本估算。</p>}</article><article className="card runtime-card"><div className="section-heading"><div><p className="eyebrow">DEPENDENCY OBSERVABILITY</p><h2>检索与降级</h2></div><span className={`badge ${dependency?.tavily?.status === "degraded" || result?.errors.length ? "warning" : "neutral"}`}>{dependency?.tavily?.status === "used" ? "Tavily 已使用" : dependency?.tavily?.status === "degraded" ? "已降级" : "受控检索"}</span></div><div className="runtime-stats"><span><b>{dependency?.duration_ms?.toFixed(0) ?? "—"} ms</b> 并行采集</span><span><b>{dependency?.tavily?.returned_sources ?? 0}</b> Tavily 证据</span><span><b>{moneyUsd(dependency?.tavily?.estimated_cost_usd)}</b> Tavily 估算</span></div>{result?.errors.length ? <div className="degradation-list">{result.errors.slice(-4).map((reason, index) => <p key={index}>⚠ {reason}</p>)}</div> : <p className="runtime-empty">未检测到降级；外部失败会在这里保留原因，不会被静默隐藏。</p>}{result?.memory_conflicts?.length ? <div className="memory-conflict"><strong>历史记忆待复核</strong><p>近期证据与已批准经验存在冲突；Agent 不会用旧经验覆盖新证据。</p>{result.memory_conflicts.map(item => <small key={item.memory_id}>{item.memory_id} · {item.reason}</small>)}</div> : null}</article></section>
-      <section className={`workspace ${view === "overview" ? "show" : ""}`}><div className="workspace-grid"><div className="card workflow-card"><div className="section-heading"><div><p className="eyebrow">LIVE WORKFLOW</p><h2>任务步骤时间线</h2></div><span className="timestamp">{task ? statusText(task.status) : "尚未启动"}</span></div><ol className="timeline">{steps.map((step, index) => { const trace = task?.trace.filter(item => item.node === step).at(-1); const working = task?.status === "running" && (!trace || trace.status === "started"); return <li key={step} className={trace?.status === "completed" ? "done" : trace?.status === "error" ? "failed" : working ? "working" : ""}><span>{trace?.status === "completed" ? "✓" : index + 1}</span><div><strong>{labels[step]}</strong><small>{trace?.message ?? (trace?.status === "completed" ? "已完成并写入任务轨迹" : working ? "Agent 正在处理此步骤" : "等待上一步完成")}</small></div><em>{trace ? new Date(trace.timestamp).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : ""}</em></li>; })}</ol></div><div className="card activity-card"><div className="section-heading"><div><p className="eyebrow">RISK SIGNALS</p><h2>结构化风险事件</h2></div><button className="text-button" onClick={() => setView("evidence")}>查看证据</button></div>{result?.events.length ? <div className="signal-list">{result.events.slice(0, 4).map((event, index) => <div className="signal" key={`${event.event_type}-${index}`}><span className={`signal-icon ${event.severity.toLowerCase()}`}>!</span><div><strong>{event.event_type.replaceAll("_", " ")}</strong><p>{event.summary}</p></div><b className={event.severity.toLowerCase()}>{event.severity}</b></div>)}</div> : <Empty icon="◇" text="风险事件将在研究完成后显示" />}</div></div></section>
-      <section className={`workspace ${view === "workflow" ? "show" : ""}`}><div className="card full-card"><div className="section-heading"><div><p className="eyebrow">AGENT OBSERVABILITY</p><h2>受限 Agent 运行轨迹</h2></div><span className="badge neutral">SSE / polling</span></div>{task ? <><div className="trace-log">{task.trace.map((entry, index) => <div key={`${entry.timestamp}-${index}`}><time>{new Date(entry.timestamp).toLocaleString("zh-CN")}</time><span className={entry.status}>{entry.status === "completed" ? "✓" : entry.status === "error" ? "×" : "·"}</span><strong>{labels[entry.node] ?? entry.node}</strong><p>{entry.message ?? (entry.status === "completed" ? "节点已完成" : "节点开始执行")}</p></div>)}</div>{result?.agent_actions?.length ? <div className="audit"><p className="eyebrow">TOOL ACTIONS · 白名单只读工具</p>{result.agent_actions.map((item, index) => <div key={`${item.tool}-${index}`}><span>↳</span><p><strong>{item.tool}</strong>{item.reason ? ` · ${item.reason}` : ""}<small>{item.observation ?? item.status}</small></p></div>)}</div> : null}</> : <Empty icon="◌" text="启动分析后，可在此查看 Agent 选择工具、补证和决策草案。" />}</div></section>
-      <section className={`workspace ${view === "evidence" ? "show" : ""}`}><div className="evidence-layout"><div className="card evidence-list"><div className="section-heading"><div><p className="eyebrow">TRACEABLE EVIDENCE</p><h2>证据中心</h2></div><span className="badge neutral">{result?.evidence.length ?? 0} 条证据</span></div>{result?.evidence.length ? result.evidence.map(item => <button className={`evidence-row ${selected?.evidence_id === item.evidence_id ? "selected" : ""}`} key={item.evidence_id} onClick={() => setSelectedEvidence(item.evidence_id)}><span className="evidence-score">{Math.round(item.overall_score * 100)}</span><div><strong>{item.evidence_id}</strong><p>{item.quote.slice(0, 90)}…</p>{item.conflict_status === "pending_review" ? <small>来源冲突待人工裁决</small> : null}</div><span>›</span></button>) : <Empty icon="◇" text="研究完成后将展示每项风险结论对应的原始证据。" />}</div><aside className="card evidence-drawer"><p className="eyebrow">RETRIEVAL FUNNEL</p><h2>RRF 与精排</h2>{result?.working_memory?.parallel_retrieval?.mode ? <p className="memory-summary">并行 Fan-out：{result.working_memory.parallel_retrieval.completed_lanes?.length ?? 0}/{result.working_memory.parallel_retrieval.lanes?.length ?? 0} 路完成 · {result.working_memory.parallel_retrieval.duration_ms ?? "—"} ms；随后统一 Fan-in 融合与精排。</p> : null}{result?.hybrid_results?.length ? <div className="memory-evidence">{result.hybrid_results.slice(0, 8).map(item => <div key={item.candidate_id ?? item.source_id}><code>{item.candidate_type === "approved_memory" ? "MEMORY" : item.source_id}</code><span>RRF {item.rrf_score?.toFixed(4) ?? "—"} · 精排 {item.rerank_score.toFixed(3)}<small>{item.rrf_lanes?.join(" + ")}</small></span></div>)}</div> : <Empty icon="≋" text="任务完成后显示四路候选、RRF 与精排。" />}{selected ? <><p className="eyebrow">EVIDENCE DETAIL</p><blockquote>{selected.quote}</blockquote><div className="detail-meta"><span>证据 ID</span><code>{selected.evidence_id}</code><span>综合评分</span><strong>{Math.round(selected.overall_score * 100)} / 100</strong></div></> : null}</aside></div></section>
-      <section className={`workspace ${view === "memory" ? "show" : ""}`}><div className="memory-layout"><div className="card"><div className="section-heading"><div><p className="eyebrow">TASK WORKING MEMORY</p><h2>任务内上下文</h2></div><span className="badge neutral">{result?.context_pack?.items.length ?? 0} / {result?.context_pack?.max_items ?? 8} 证据</span></div>{result?.context_pack ? <><p className="memory-summary">{result.working_memory?.context_summary ?? "上下文包尚未生成"}</p><div className="budget"><b style={{ width: `${Math.min(100, result.context_pack.used_tokens / result.context_pack.budget_tokens * 100)}%` }} /></div><small>{result.context_pack.used_tokens} / {result.context_pack.budget_tokens} tokens · 原文始终可在证据中心回溯</small><div className="memory-evidence">{result.context_pack.items.map(item => <div key={item.evidence_id}><code>{item.evidence_id}</code><span>{item.summary}</span></div>)}</div></> : <Empty icon="◫" text="任务完成后显示受控证据包与上下文预算。" />}</div><div className="card"><div className="section-heading"><div><p className="eyebrow">SITUATIONAL MEMORY</p><h2>相似任务快照</h2></div><span className="badge neutral">{result?.situational_memories?.length ?? 0} 条</span></div>{result?.situational_memories?.length ? <div className="memory-list">{result.situational_memories.map(item => <article key={item.task_id}><code>{item.task_id.slice(0, 8)}</code><p>{item.question}</p><small>{item.events.length} 个风险事件 · 推荐 {item.decision?.recommended_strategy ?? "未生成策略"}</small></article>)}</div> : <Empty icon="◌" text="完成过的相同 scope 任务会以只读快照形式出现在这里。" />}</div><div className="card"><div className="section-heading"><div><p className="eyebrow">APPROVED BUSINESS MEMORY</p><h2>已召回历史记忆</h2></div><span className="badge neutral">{result?.recalled_memories?.length ?? 0} 条</span></div>{result?.recalled_memories?.length ? <MemoryList items={result.recalled_memories} /> : <Empty icon="↺" text="当前 scope 尚未命中已批准的跨任务业务记忆。" />}</div><div className="card memory-candidate"><div className="section-heading"><div><p className="eyebrow">REVIEW-GATED MEMORY</p><h2>候选长期记忆</h2></div><span className={`badge ${result?.memory_candidate ? "warning" : "neutral"}`}>{result?.memory_candidate?.status ?? "无候选"}</span></div>{result?.memory_candidate ? <><MemoryList items={[result.memory_candidate]} /><label>替换内容<input value={replacementText} onChange={event => setReplacementText(event.target.value)} placeholder="输入修订后的业务规则或复盘结论" /></label><div className="review-actions"><button className="primary-button" onClick={() => memoryAction(result.memory_candidate!, "approve")}>批准沉淀</button><button className="secondary-button" onClick={() => memoryAction(result.memory_candidate!, "supersede")}>替换候选</button><button className="danger-button" onClick={() => memoryAction(result.memory_candidate!, "expire")}>驳回并过期</button></div></> : <>{result?.memory_candidate_extraction?.status === "rejected" ? <small>未生成候选：{result.memory_candidate_extraction.reasons.join("、")}。临时事实、日志和无证据事件不会沉淀。</small> : null}<Empty icon="✓" text="只有审核完成且具备 Evidence ID、合法 scope 与可复用风险模式的结论才会成为候选长期记忆。" /></>}</div></div></section>
-      <section className={`workspace ${view === "review" ? "show" : ""}`}><div className="review-layout"><div className="card strategy-card"><div className="section-heading"><div><p className="eyebrow">DECISION SIMULATION</p><h2>策略对比</h2></div><span className="badge neutral">{result?.decision ? `${result.decision.samples} 次仿真` : "Agent 将自动生成决策"}</span></div>{result?.decision ? <><div className={`recommendation ${result.decision.recommended_strategy ? "" : "infeasible"}`}><span>{result.decision.recommended_strategy ? "推荐方案" : "约束不可行"}</span><strong>{result.decision.recommended_strategy ?? "当前条件下无可行方案"}</strong><p>{result.decision.infeasibility_reason ?? "基于风险事件、预算与服务水平约束计算。"}</p></div><div className="strategy-table"><div className="strategy-header"><span>策略 / 风险偏好</span><span>补货量</span><span>服务水平</span><span>缺货概率</span><span>预期成本</span></div>{result.decision.strategies.map(strategy => <div className={`strategy-row ${strategy.strategy === result.decision?.recommended_strategy ? "recommended" : ""}`} key={strategy.strategy}><strong>{strategy.strategy}<small>{strategy.risk_profile ?? "balanced"} · 目标 {strategy.service_target !== undefined ? percent(strategy.service_target) : "—"}</small>{strategy.strategy === result.decision?.recommended_strategy && <small>RECOMMENDED</small>}</strong><span>{strategy.replenishment_quantity}</span><span><i className="mini-bar"><b style={{ width: `${strategy.service_level * 100}%` }} /></i>{percent(strategy.service_level)}</span><span>{percent(strategy.stockout_probability)}</span><span>{money(strategy.expected_total_cost)}</span></div>)}</div></> : <Empty icon="▦" text="ReAct Manager 将在证据收敛后自动运行确定性决策并提交审核。" />}</div><div className="card review-card"><div className="section-heading"><div><p className="eyebrow">HUMAN-IN-THE-LOOP</p><h2>审核工作台</h2></div><span className={`badge ${task?.status === "awaiting_review" ? "warning" : "neutral"}`}>{statusText(task?.status)}</span></div>{task?.status === "awaiting_review" ? <><p className="review-intro">决策草案由 Agent 自动提交；审核操作会持久化到审计记录，可用于复盘与合规追踪。</p><label>审核意见<textarea value={reviewComment} onChange={event => setReviewComment(event.target.value)} placeholder="说明批准或调整依据（可选）" /></label><label>约束条件（JSON）<input value={constraintText} onChange={event => setConstraintText(event.target.value)} /></label><div className="review-actions"><button className="primary-button" onClick={() => review("approve")}>批准方案</button><button className="secondary-button" onClick={() => review("modify-constraints")}>调整约束</button><button className="secondary-button" onClick={() => review("need-more-evidence")}>补充证据</button><button className="danger-button" onClick={() => review("reject")}>拒绝</button></div></> : <Empty icon="✓" text={result?.decision ? "决策草案正在自动提交至人工审核。" : "完成取证与决策后将自动进入人工审核。"} />}{result?.audit_trail?.length ? <div className="audit"><p className="eyebrow">AUDIT TRAIL</p>{result.audit_trail.slice().reverse().map((item, index) => <div key={index}><span>✓</span><p><strong>{item.action.replaceAll("_", " ")}</strong>{item.comment ? ` · ${item.comment}` : ""}<small>{new Date(item.timestamp).toLocaleString("zh-CN")}</small></p></div>)}</div> : null}</div></div></section>
-      <section className="knowledge card"><div className="section-heading"><div><p className="eyebrow">PRIVATE KNOWLEDGE</p><h2>本地知识库</h2></div><span className="badge neutral">Qdrant + BM25</span></div><div className="knowledge-grid"><div><label className="file-input">选择业务 PDF<input type="file" accept="application/pdf,.pdf" onChange={event => setPdf(event.target.files?.[0] ?? null)} /><span>{pdf?.name ?? "上传不超过 5 MB 的可复制文本 PDF"}</span></label><button className="secondary-button" onClick={uploadPdf}>导入知识库</button>{uploadMessage && <p className="form-message">{uploadMessage}</p>}</div><form onSubmit={searchKnowledge}><label>检索已导入资料</label><div className="search-input"><input value={knowledgeQuery} onChange={event => setKnowledgeQuery(event.target.value)} minLength={3} placeholder="例如：暴雨导致配送延迟" /><button>搜索</button></div>{knowledgeResults.length ? <ul>{knowledgeResults.map(item => <li key={item.source_id}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a><span>融合分 {item.rerank_score.toFixed(3)}</span></li>)}</ul> : null}</form></div></section>
-      <section className={`workspace ${view === "memory" ? "show" : ""}`}><div className="card full-card"><div className="section-heading"><div><p className="eyebrow">MEMORY HITL #2</p><h2>原子候选详情与审核</h2></div><span className="badge neutral">{result?.memory_candidates?.length ?? 0} 条</span></div>{result?.memory_candidates?.length ? <><p className="memory-summary">决策审核和记忆审核相互独立。选择批准或驳回前，请核对来源任务、Evidence ID、适用范围、重复/冲突提示。</p><label>记忆审核意见（驳回时必填）<textarea value={reviewComment} onChange={event => setReviewComment(event.target.value)} placeholder="例如：该案例仅为偶发事件，不应跨任务复用" /></label>{result.memory_candidates.map(memory => <article className="memory-list" key={`${memory.memory_id}-detail`}><div><code>{memory.memory_id}</code><span className={`memory-status ${memory.status}`}>{memory.status}</span></div><p>{memory.content}</p><small>来源任务：{memory.origin_task_id ?? "人工维护"} · 类型：{memory.kind ?? "episodic"} · 版本 v{memory.revision ?? 1}</small><small>Evidence：{memory.evidence_ids.join(", ") || "无"}</small><small>范围：{Object.entries(memory.scope ?? {}).filter(([, value]) => value).map(([key, value]) => `${key}: ${value}`).join(" · ") || "默认 workspace"}</small>{memory.possible_duplicate_of ? <small>可能重复：{memory.possible_duplicate_of}</small> : null}{memory.conflicts_with?.length ? <small>可能冲突：{memory.conflicts_with.join(", ")}</small> : null}{memory.review_action ? <small>审核：{memory.review_action} · {memory.review_comment ?? "无意见"}</small> : null}{memory.status === "candidate" ? <div className="review-actions"><button className="primary-button" onClick={() => memoryAction(memory, "approve")}>批准沉淀</button><button className="danger-button" onClick={() => memoryAction(memory, "reject")}>驳回候选</button></div> : null}</article>)}</> : <Empty icon="✓" text="当前没有待审核的原子记忆候选。" />}</div></section>
-    </main></div>;
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brand-mark">S</span>
+          <div>
+            <strong>StoreFlow</strong>
+            <small>INVESTIGATION & DECISION</small>
+          </div>
+        </div>
+        <nav>
+          {(
+            [
+              ["overview", "概览", "⌘"],
+              ["workflow", "Agent 调查", "◌"],
+              ["analysis", "异常分析", "⌁"],
+              ["evidence", "证据中心", "◇"],
+              ["memory", "记忆与上下文", "◫"],
+              ["review", "采购审核", "✓"],
+            ] as const
+          ).map(([key, name, icon]) => (
+            <button
+              key={key}
+              className={`nav-item ${view === key ? "active" : ""}`}
+              onClick={() => setView(key)}
+            >
+              <span>{icon}</span>
+              {name}
+              {key === "review" && task?.status === "awaiting_review" ? (
+                <i />
+              ) : null}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <div className="system-dot" />
+          <span>系统在线</span>
+          <small>单周期演示环境</small>
+        </div>
+      </aside>
+      <main className="dashboard">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">供应链异常调查与补货决策</p>
+            <h1>门店异常调查控制台</h1>
+          </div>
+          <div className="top-actions">
+            <span className="live-pill">
+              <b /> {accessToken ? "JWT 已登录" : "本地演示身份"}
+            </span>
+            <input
+              aria-label="用户名"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder="用户名"
+            />
+            <input
+              aria-label="密码"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type="password"
+              placeholder="密码"
+            />
+            <button
+              className="secondary-button"
+              onClick={login}
+              disabled={!username || !password}
+            >
+              登录
+            </button>
+            <button
+              className="icon-button"
+              title="刷新任务"
+              onClick={refreshTask}
+              disabled={!task}
+            >
+              ↻
+            </button>
+            <div className="avatar">SF</div>
+          </div>
+        </header>
+        {error && (
+          <div className="alert">
+            <span>!</span>
+            <div>
+              <strong>操作未完成</strong>
+              <p>{error}</p>
+            </div>
+            <button onClick={() => setError("")}>×</button>
+          </div>
+        )}
+        <section className="hero-grid">
+          <div className="new-task card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">NEW PURCHASE DRAFT</p>
+                <h2>创建门店补货任务</h2>
+              </div>
+              <span className="badge neutral">Bounded Agent</span>
+            </div>
+            <form onSubmit={submit}>
+              <label htmlFor="question">描述采购决策问题</label>
+              <textarea
+                id="question"
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                minLength={5}
+                required
+              />
+              <div className="form-foot">
+                <input
+                  aria-label="门店"
+                  value={store}
+                  onChange={(event) => setStore(event.target.value)}
+                  placeholder="目标门店"
+                />
+                <input
+                  aria-label="SKU"
+                  value={sku}
+                  onChange={(event) => setSku(event.target.value)}
+                  placeholder="品类或 SKU"
+                />
+              </div>
+              <div className="business-inputs">
+                <div>
+                  <strong>运营参数</strong>
+                  <small>
+                    不上传资料时，这些手动输入即为仿真的业务假设；上传 PDF
+                    后会与 RAG 证据共同使用。
+                  </small>
+                </div>
+                <div className="business-input-grid">
+                  {numericFields.map(([name, label, unit]) => (
+                    <label key={name}>
+                      {label}
+                      <span>{unit}</span>
+                      <input
+                        type="number"
+                        step={
+                          name === "target_service_level" ||
+                          name === "holding_cost"
+                            ? "0.01"
+                            : "1"
+                        }
+                        min="0"
+                        value={businessInputs[name]}
+                        onChange={(event) =>
+                          setBusinessInputs((current) => ({
+                            ...current,
+                            [name]: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="form-foot">
+                <span>
+                  Agent 仅检索、分析和生成采购草案；不会创建采购单或修改库存。
+                </span>
+                <button className="primary-button" disabled={creating}>
+                  {creating ? "正在启动…" : "生成订货建议  →"}
+                </button>
+              </div>
+            </form>
+          </div>
+          <div className="risk-hero card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">RISK POSTURE</p>
+                <h2>当前补货风险</h2>
+              </div>
+              <span
+                className={`badge ${riskScore >= 50 ? "danger" : riskScore ? "warning" : "neutral"}`}
+              >
+                {riskScore >= 50
+                  ? "需要采购关注"
+                  : riskScore
+                    ? "持续观察"
+                    : "等待信号"}
+              </span>
+            </div>
+            <div className="score">
+              <strong>{riskScore || "—"}</strong>
+              <span>/100</span>
+            </div>
+            <div className="score-bar">
+              <i style={{ width: `${riskScore}%` }} />
+            </div>
+            <p>
+              {result
+                ? `${result.events.length} 个已识别风险事件，覆盖库存、需求、到货和成本。`
+                : "创建任务后，在此查看门店缺货与到货风险。"}
+            </p>
+          </div>
+        </section>
+        <section className="kpi-grid">
+          <Metric
+            label="任务状态"
+            value={statusText(task?.status)}
+            caption={
+              task ? `ID ${task.task_id.slice(0, 8)}` : "尚无进行中的任务"
+            }
+            tone={task?.status === "awaiting_review" ? "amber" : "blue"}
+          />
+          <Metric
+            label="证据可信度"
+            value={
+              result?.evidence.length
+                ? `${Math.round((result.evidence.reduce((sum, item) => sum + item.overall_score, 0) / result.evidence.length) * 100)}%`
+                : "—"
+            }
+            caption={
+              result ? `${result.evidence.length} 条可追溯证据` : "等待证据输入"
+            }
+            tone="mint"
+          />
+          <Metric
+            label="建议补货量"
+            value={best ? `${best.replenishment_quantity}` : "—"}
+            caption={best ? best.strategy : "尚未运行优化"}
+            tone="blue"
+          />
+          <Metric
+            label="预期服务水平"
+            value={best ? percent(best.service_level) : "—"}
+            caption={
+              best ? `成本 ${money(best.expected_total_cost)}` : "等待决策计算"
+            }
+            tone="violet"
+          />
+        </section>
+        <section className="runtime-grid">
+          <article className="card runtime-card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">MODEL OBSERVABILITY</p>
+                <h2>模型与成本</h2>
+              </div>
+              <span
+                className={`badge ${modelDegradations.length ? "warning" : "neutral"}`}
+              >
+                {remoteModelCalls.length
+                  ? `${remoteModelCalls.length} 次远程调用`
+                  : "确定性模式"}
+              </span>
+            </div>
+            <div className="runtime-stats">
+              <span>
+                <b>{result?.token_usage ?? 0}</b> tokens
+              </span>
+              <span>
+                <b>{moneyUsd(result?.estimated_cost_usd)}</b> 模型估算
+              </span>
+              <span>
+                <b>
+                  {remoteModelCalls
+                    .reduce((sum, item) => sum + (item.latency_ms ?? 0), 0)
+                    .toFixed(0)}{" "}
+                  ms
+                </b>{" "}
+                远程耗时
+              </span>
+            </div>
+            {modelCalls.length ? (
+              <div className="runtime-list">
+                {modelCalls.map((item, index) => (
+                  <div key={`${item.model ?? item.provider}-${index}`}>
+                    <strong>{item.model ?? item.provider ?? "百炼"}</strong>
+                    <span>
+                      {item.mode === "remote" ? "remote" : "确定性降级"} ·{" "}
+                      {item.total_tokens ?? 0} tokens
+                    </span>
+                    <small>
+                      {item.reason ??
+                        (item.cost_estimate_status === "rate_not_configured"
+                          ? "未配置本地价格表，不虚构成本"
+                          : `成本 ${moneyUsd(item.estimated_cost_usd)}`)}
+                    </small>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="runtime-empty">
+                任务完成后显示模型调用、token、耗时与成本估算。
+              </p>
+            )}
+          </article>
+          <article className="card runtime-card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">DEPENDENCY OBSERVABILITY</p>
+                <h2>检索与降级</h2>
+              </div>
+              <span
+                className={`badge ${dependency?.tavily?.status === "degraded" || result?.errors.length ? "warning" : "neutral"}`}
+              >
+                {dependency?.tavily?.status === "used"
+                  ? "Tavily 已使用"
+                  : dependency?.tavily?.status === "degraded"
+                    ? "已降级"
+                    : "受控检索"}
+              </span>
+            </div>
+            <div className="runtime-stats">
+              <span>
+                <b>{dependency?.duration_ms?.toFixed(0) ?? "—"} ms</b> 并行采集
+              </span>
+              <span>
+                <b>{dependency?.tavily?.returned_sources ?? 0}</b> Tavily 证据
+              </span>
+              <span>
+                <b>{moneyUsd(dependency?.tavily?.estimated_cost_usd)}</b> Tavily
+                估算
+              </span>
+            </div>
+            {result?.errors.length ? (
+              <div className="degradation-list">
+                {result.errors.slice(-4).map((reason, index) => (
+                  <p key={index}>⚠ {reason}</p>
+                ))}
+              </div>
+            ) : (
+              <p className="runtime-empty">
+                未检测到降级；外部失败会在这里保留原因，不会被静默隐藏。
+              </p>
+            )}
+            {result?.memory_conflicts?.length ? (
+              <div className="memory-conflict">
+                <strong>历史记忆待复核</strong>
+                <p>
+                  近期证据与已批准经验存在冲突；Agent 不会用旧经验覆盖新证据。
+                </p>
+                {result.memory_conflicts.map((item) => (
+                  <small key={item.memory_id}>
+                    {item.memory_id} · {item.reason}
+                  </small>
+                ))}
+              </div>
+            ) : null}
+          </article>
+        </section>
+        <section className={`workspace ${view === "overview" ? "show" : ""}`}>
+          <div className="workspace-grid">
+            <div className="card workflow-card">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">LIVE WORKFLOW</p>
+                  <h2>任务步骤时间线</h2>
+                </div>
+                <span className="timestamp">
+                  {task ? statusText(task.status) : "尚未启动"}
+                </span>
+              </div>
+              <ol className="timeline">
+                {steps.map((step, index) => {
+                  const trace = task?.trace
+                    .filter((item) => item.node === step)
+                    .at(-1);
+                  const working =
+                    task?.status === "running" &&
+                    (!trace || trace.status === "started");
+                  return (
+                    <li
+                      key={step}
+                      className={
+                        trace?.status === "completed"
+                          ? "done"
+                          : trace?.status === "error"
+                            ? "failed"
+                            : working
+                              ? "working"
+                              : ""
+                      }
+                    >
+                      <span>
+                        {trace?.status === "completed" ? "✓" : index + 1}
+                      </span>
+                      <div>
+                        <strong>{labels[step]}</strong>
+                        <small>
+                          {trace?.message ??
+                            (trace?.status === "completed"
+                              ? "已完成并写入任务轨迹"
+                              : working
+                                ? "Agent 正在处理此步骤"
+                                : "等待上一步完成")}
+                        </small>
+                      </div>
+                      <em>
+                        {trace
+                          ? new Date(trace.timestamp).toLocaleTimeString(
+                              "zh-CN",
+                              { hour: "2-digit", minute: "2-digit" },
+                            )
+                          : ""}
+                      </em>
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+            <div className="card activity-card">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">RISK SIGNALS</p>
+                  <h2>结构化风险事件</h2>
+                </div>
+                <button
+                  className="text-button"
+                  onClick={() => setView("evidence")}
+                >
+                  查看证据
+                </button>
+              </div>
+              {result?.events.length ? (
+                <div className="signal-list">
+                  {result.events.slice(0, 4).map((event, index) => (
+                    <div
+                      className="signal"
+                      key={`${event.event_type}-${index}`}
+                    >
+                      <span
+                        className={`signal-icon ${event.severity.toLowerCase()}`}
+                      >
+                        !
+                      </span>
+                      <div>
+                        <strong>{event.event_type.replaceAll("_", " ")}</strong>
+                        <p>{event.summary}</p>
+                      </div>
+                      <b className={event.severity.toLowerCase()}>
+                        {event.severity}
+                      </b>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Empty icon="◇" text="风险事件将在研究完成后显示" />
+              )}
+            </div>
+          </div>
+        </section>
+        <section className={`workspace ${view === "workflow" ? "show" : ""}`}>
+          <div className="card full-card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">AGENT OBSERVABILITY</p>
+                <h2>受限 Agent 运行轨迹</h2>
+              </div>
+              <span className="badge neutral">SSE / polling</span>
+            </div>
+            {task ? (
+              <>
+                <div className="trace-log">
+                  {task.trace.map((entry, index) => (
+                    <div key={`${entry.timestamp}-${index}`}>
+                      <time>
+                        {new Date(entry.timestamp).toLocaleString("zh-CN")}
+                      </time>
+                      <span className={entry.status}>
+                        {entry.status === "completed"
+                          ? "✓"
+                          : entry.status === "error"
+                            ? "×"
+                            : "·"}
+                      </span>
+                      <strong>{labels[entry.node] ?? entry.node}</strong>
+                      <p>
+                        {entry.message ??
+                          (entry.status === "completed"
+                            ? "节点已完成"
+                            : "节点开始执行")}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                {result?.agent_actions?.length ? (
+                  <div className="audit">
+                    <p className="eyebrow">TOOL ACTIONS · 白名单只读工具</p>
+                    {result.agent_actions.map((item, index) => (
+                      <div key={`${item.tool}-${index}`}>
+                        <span>↳</span>
+                        <p>
+                          <strong>{item.tool}</strong>
+                          {item.reason ? ` · ${item.reason}` : ""}
+                          <small>{item.observation ?? item.status}</small>
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <Empty
+                icon="◌"
+                text="启动分析后，可在此查看 Agent 选择工具、补证和决策草案。"
+              />
+            )}
+          </div>
+        </section>
+        <section className={`workspace ${view === "analysis" ? "show" : ""}`}>
+          <AnalysisPage result={result} />
+        </section>
+        <section className={`workspace ${view === "evidence" ? "show" : ""}`}>
+          <div className="evidence-layout">
+            <div className="card evidence-list">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">TRACEABLE EVIDENCE</p>
+                  <h2>证据中心</h2>
+                </div>
+                <span className="badge neutral">
+                  {result?.evidence.length ?? 0} 条证据
+                </span>
+              </div>
+              {result?.evidence.length ? (
+                result.evidence.map((item) => (
+                  <button
+                    className={`evidence-row ${selected?.evidence_id === item.evidence_id ? "selected" : ""}`}
+                    key={item.evidence_id}
+                    onClick={() => setSelectedEvidence(item.evidence_id)}
+                  >
+                    <span className="evidence-score">
+                      {Math.round(item.overall_score * 100)}
+                    </span>
+                    <div>
+                      <strong>{item.evidence_id}</strong>
+                      <p>{item.quote.slice(0, 90)}…</p>
+                      {item.conflict_status === "pending_review" ? (
+                        <small>来源冲突待人工裁决</small>
+                      ) : null}
+                    </div>
+                    <span>›</span>
+                  </button>
+                ))
+              ) : (
+                <Empty
+                  icon="◇"
+                  text="研究完成后将展示每项风险结论对应的原始证据。"
+                />
+              )}
+            </div>
+            <aside className="card evidence-drawer">
+              <p className="eyebrow">RETRIEVAL FUNNEL</p>
+              <h2>RRF 与精排</h2>
+              {result?.working_memory?.parallel_retrieval?.mode ? (
+                <p className="memory-summary">
+                  并行 Fan-out：
+                  {result.working_memory.parallel_retrieval.completed_lanes
+                    ?.length ?? 0}
+                  /{result.working_memory.parallel_retrieval.lanes?.length ?? 0}{" "}
+                  路完成 ·{" "}
+                  {result.working_memory.parallel_retrieval.duration_ms ?? "—"}{" "}
+                  ms；随后统一 Fan-in 融合与精排。
+                </p>
+              ) : null}
+              {result?.hybrid_results?.length ? (
+                <div className="memory-evidence">
+                  {result.hybrid_results.slice(0, 8).map((item) => (
+                    <div key={item.candidate_id ?? item.source_id}>
+                      <code>
+                        {item.candidate_type === "approved_memory"
+                          ? "MEMORY"
+                          : item.source_id}
+                      </code>
+                      <span>
+                        RRF {item.rrf_score?.toFixed(4) ?? "—"} · 精排{" "}
+                        {item.rerank_score.toFixed(3)}
+                        <small>{item.rrf_lanes?.join(" + ")}</small>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Empty icon="≋" text="任务完成后显示四路候选、RRF 与精排。" />
+              )}
+              {selected ? (
+                <>
+                  <p className="eyebrow">EVIDENCE DETAIL</p>
+                  <blockquote>{selected.quote}</blockquote>
+                  <div className="detail-meta">
+                    <span>证据 ID</span>
+                    <code>{selected.evidence_id}</code>
+                    <span>综合评分</span>
+                    <strong>
+                      {Math.round(selected.overall_score * 100)} / 100
+                    </strong>
+                  </div>
+                </>
+              ) : null}
+            </aside>
+          </div>
+        </section>
+        <section className={`workspace ${view === "memory" ? "show" : ""}`}>
+          <div className="memory-layout">
+            <div className="card">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">TASK WORKING MEMORY</p>
+                  <h2>任务内上下文</h2>
+                </div>
+                <span className="badge neutral">
+                  {result?.context_pack?.items.length ?? 0} /{" "}
+                  {result?.context_pack?.max_items ?? 8} 证据
+                </span>
+              </div>
+              {result?.context_pack ? (
+                <>
+                  <p className="memory-summary">
+                    {result.working_memory?.context_summary ??
+                      "上下文包尚未生成"}
+                  </p>
+                  <div className="budget">
+                    <b
+                      style={{
+                        width: `${Math.min(100, (result.context_pack.used_tokens / result.context_pack.budget_tokens) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  <small>
+                    {result.context_pack.used_tokens} /{" "}
+                    {result.context_pack.budget_tokens} tokens ·
+                    原文始终可在证据中心回溯
+                  </small>
+                  <div className="memory-evidence">
+                    {result.context_pack.items.map((item) => (
+                      <div key={item.evidence_id}>
+                        <code>{item.evidence_id}</code>
+                        <span>{item.summary}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <Empty icon="◫" text="任务完成后显示受控证据包与上下文预算。" />
+              )}
+            </div>
+            <div className="card">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">SITUATIONAL MEMORY</p>
+                  <h2>相似任务快照</h2>
+                </div>
+                <span className="badge neutral">
+                  {result?.situational_memories?.length ?? 0} 条
+                </span>
+              </div>
+              {result?.situational_memories?.length ? (
+                <div className="memory-list">
+                  {result.situational_memories.map((item) => (
+                    <article key={item.task_id}>
+                      <code>{item.task_id.slice(0, 8)}</code>
+                      <p>{item.question}</p>
+                      <small>
+                        {item.events.length} 个风险事件 · 推荐{" "}
+                        {item.decision?.recommended_strategy ?? "未生成策略"}
+                      </small>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <Empty
+                  icon="◌"
+                  text="完成过的相同 scope 任务会以只读快照形式出现在这里。"
+                />
+              )}
+            </div>
+            <div className="card">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">APPROVED BUSINESS MEMORY</p>
+                  <h2>已召回历史记忆</h2>
+                </div>
+                <span className="badge neutral">
+                  {result?.recalled_memories?.length ?? 0} 条
+                </span>
+              </div>
+              {result?.recalled_memories?.length ? (
+                <MemoryList items={result.recalled_memories} />
+              ) : (
+                <Empty
+                  icon="↺"
+                  text="当前 scope 尚未命中已批准的跨任务业务记忆。"
+                />
+              )}
+            </div>
+            <div className="card memory-candidate">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">REVIEW-GATED MEMORY</p>
+                  <h2>候选长期记忆</h2>
+                </div>
+                <span
+                  className={`badge ${result?.memory_candidate ? "warning" : "neutral"}`}
+                >
+                  {result?.memory_candidate?.status ?? "无候选"}
+                </span>
+              </div>
+              {result?.memory_candidate ? (
+                <>
+                  <MemoryList items={[result.memory_candidate]} />
+                  <label>
+                    替换内容
+                    <input
+                      value={replacementText}
+                      onChange={(event) =>
+                        setReplacementText(event.target.value)
+                      }
+                      placeholder="输入修订后的业务规则或复盘结论"
+                    />
+                  </label>
+                  <div className="review-actions">
+                    <button
+                      className="primary-button"
+                      onClick={() =>
+                        memoryAction(result.memory_candidate!, "approve")
+                      }
+                    >
+                      批准沉淀
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() =>
+                        memoryAction(result.memory_candidate!, "supersede")
+                      }
+                    >
+                      替换候选
+                    </button>
+                    <button
+                      className="danger-button"
+                      onClick={() =>
+                        memoryAction(result.memory_candidate!, "expire")
+                      }
+                    >
+                      驳回并过期
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {result?.memory_candidate_extraction?.status ===
+                  "rejected" ? (
+                    <small>
+                      未生成候选：
+                      {result.memory_candidate_extraction.reasons.join("、")}
+                      。临时事实、日志和无证据事件不会沉淀。
+                    </small>
+                  ) : null}
+                  <Empty
+                    icon="✓"
+                    text="只有审核完成且具备 Evidence ID、合法 scope 与可复用风险模式的结论才会成为候选长期记忆。"
+                  />
+                </>
+              )}
+            </div>
+          </div>
+        </section>
+        <section className={`workspace ${view === "review" ? "show" : ""}`}>
+          <div className="review-layout">
+            <div className="card strategy-card">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">DECISION SIMULATION</p>
+                  <h2>策略对比</h2>
+                </div>
+                <span className="badge neutral">
+                  {result?.decision
+                    ? `${result.decision.samples} 次仿真`
+                    : "Agent 将自动生成决策"}
+                </span>
+              </div>
+              {result?.decision ? (
+                <>
+                  <div
+                    className={`recommendation ${result.decision.recommended_strategy ? "" : "infeasible"}`}
+                  >
+                    <span>
+                      {result.decision.recommended_strategy
+                        ? "推荐方案"
+                        : "约束不可行"}
+                    </span>
+                    <strong>
+                      {result.decision.recommended_strategy ??
+                        "当前条件下无可行方案"}
+                    </strong>
+                    <p>
+                      {result.decision.infeasibility_reason ??
+                        "基于风险事件、预算与服务水平约束计算。"}
+                    </p>
+                  </div>
+                  <div className="strategy-table">
+                    <div className="strategy-header">
+                      <span>策略 / 风险偏好</span>
+                      <span>补货量</span>
+                      <span>服务水平</span>
+                      <span>缺货概率</span>
+                      <span>预期成本</span>
+                    </div>
+                    {result.decision.strategies.map((strategy) => (
+                      <div
+                        className={`strategy-row ${strategy.strategy === result.decision?.recommended_strategy ? "recommended" : ""}`}
+                        key={strategy.strategy}
+                      >
+                        <strong>
+                          {strategy.strategy}
+                          <small>
+                            {strategy.risk_profile ?? "balanced"} · 目标{" "}
+                            {strategy.service_target !== undefined
+                              ? percent(strategy.service_target)
+                              : "—"}
+                          </small>
+                          {strategy.strategy ===
+                            result.decision?.recommended_strategy && (
+                            <small>RECOMMENDED</small>
+                          )}
+                        </strong>
+                        <span>{strategy.replenishment_quantity}</span>
+                        <span>
+                          <i className="mini-bar">
+                            <b
+                              style={{
+                                width: `${strategy.service_level * 100}%`,
+                              }}
+                            />
+                          </i>
+                          {percent(strategy.service_level)}
+                        </span>
+                        <span>{percent(strategy.stockout_probability)}</span>
+                        <span>{money(strategy.expected_total_cost)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <Empty
+                  icon="▦"
+                  text="ReAct Manager 将在证据收敛后自动运行确定性决策并提交审核。"
+                />
+              )}
+            </div>
+            <div className="card review-card">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">HUMAN-IN-THE-LOOP</p>
+                  <h2>审核工作台</h2>
+                </div>
+                <span
+                  className={`badge ${task?.status === "awaiting_review" ? "warning" : "neutral"}`}
+                >
+                  {statusText(task?.status)}
+                </span>
+              </div>
+              {task?.status === "awaiting_review" ? (
+                <>
+                  <p className="review-intro">
+                    决策草案由 Agent
+                    自动提交；审核操作会持久化到审计记录，可用于复盘与合规追踪。
+                  </p>
+                  <label>
+                    审核意见
+                    <textarea
+                      value={reviewComment}
+                      onChange={(event) => setReviewComment(event.target.value)}
+                      placeholder="说明批准或调整依据（可选）"
+                    />
+                  </label>
+                  <label>
+                    约束条件（JSON）
+                    <input
+                      value={constraintText}
+                      onChange={(event) =>
+                        setConstraintText(event.target.value)
+                      }
+                    />
+                  </label>
+                  <div className="review-actions">
+                    <button
+                      className="primary-button"
+                      onClick={() => review("approve")}
+                    >
+                      批准方案
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() => review("modify-constraints")}
+                    >
+                      调整约束
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() => review("need-more-evidence")}
+                    >
+                      补充证据
+                    </button>
+                    <button
+                      className="danger-button"
+                      onClick={() => review("reject")}
+                    >
+                      拒绝
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <Empty
+                  icon="✓"
+                  text={
+                    result?.decision
+                      ? "决策草案正在自动提交至人工审核。"
+                      : "完成取证与决策后将自动进入人工审核。"
+                  }
+                />
+              )}
+              {result?.audit_trail?.length ? (
+                <div className="audit">
+                  <p className="eyebrow">AUDIT TRAIL</p>
+                  {result.audit_trail
+                    .slice()
+                    .reverse()
+                    .map((item, index) => (
+                      <div key={index}>
+                        <span>✓</span>
+                        <p>
+                          <strong>{item.action.replaceAll("_", " ")}</strong>
+                          {item.comment ? ` · ${item.comment}` : ""}
+                          <small>
+                            {new Date(item.timestamp).toLocaleString("zh-CN")}
+                          </small>
+                        </p>
+                      </div>
+                    ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+        <section className="knowledge card">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">PRIVATE KNOWLEDGE</p>
+              <h2>本地知识库</h2>
+            </div>
+            <span className="badge neutral">Qdrant + BM25</span>
+          </div>
+          <div className="knowledge-grid">
+            <div>
+              <label className="file-input">
+                选择业务 PDF
+                <input
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  onChange={(event) => setPdf(event.target.files?.[0] ?? null)}
+                />
+                <span>{pdf?.name ?? "上传不超过 5 MB 的可复制文本 PDF"}</span>
+              </label>
+              <button className="secondary-button" onClick={uploadPdf}>
+                导入知识库
+              </button>
+              {uploadMessage && <p className="form-message">{uploadMessage}</p>}
+            </div>
+            <form onSubmit={searchKnowledge}>
+              <label>检索已导入资料</label>
+              <div className="search-input">
+                <input
+                  value={knowledgeQuery}
+                  onChange={(event) => setKnowledgeQuery(event.target.value)}
+                  minLength={3}
+                  placeholder="例如：暴雨导致配送延迟"
+                />
+                <button>搜索</button>
+              </div>
+              {knowledgeResults.length ? (
+                <ul>
+                  {knowledgeResults.map((item) => (
+                    <li key={item.source_id}>
+                      <a href={item.url} target="_blank" rel="noreferrer">
+                        {item.title}
+                      </a>
+                      <span>融合分 {item.rerank_score.toFixed(3)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </form>
+          </div>
+        </section>
+        <section className={`workspace ${view === "memory" ? "show" : ""}`}>
+          <div className="card full-card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">MEMORY HITL #2</p>
+                <h2>原子候选详情与审核</h2>
+              </div>
+              <span className="badge neutral">
+                {result?.memory_candidates?.length ?? 0} 条
+              </span>
+            </div>
+            {result?.memory_candidates?.length ? (
+              <>
+                <p className="memory-summary">
+                  决策审核和记忆审核相互独立。选择批准或驳回前，请核对来源任务、Evidence
+                  ID、适用范围、重复/冲突提示。
+                </p>
+                <label>
+                  记忆审核意见（驳回时必填）
+                  <textarea
+                    value={reviewComment}
+                    onChange={(event) => setReviewComment(event.target.value)}
+                    placeholder="例如：该案例仅为偶发事件，不应跨任务复用"
+                  />
+                </label>
+                {result.memory_candidates.map((memory) => (
+                  <article
+                    className="memory-list"
+                    key={`${memory.memory_id}-detail`}
+                  >
+                    <div>
+                      <code>{memory.memory_id}</code>
+                      <span className={`memory-status ${memory.status}`}>
+                        {memory.status}
+                      </span>
+                    </div>
+                    <p>{memory.content}</p>
+                    <small>
+                      来源任务：{memory.origin_task_id ?? "人工维护"} · 类型：
+                      {memory.kind ?? "episodic"} · 版本 v{memory.revision ?? 1}
+                    </small>
+                    <small>
+                      Evidence：{memory.evidence_ids.join(", ") || "无"}
+                    </small>
+                    <small>
+                      范围：
+                      {Object.entries(memory.scope ?? {})
+                        .filter(([, value]) => value)
+                        .map(([key, value]) => `${key}: ${value}`)
+                        .join(" · ") || "默认 workspace"}
+                    </small>
+                    {memory.possible_duplicate_of ? (
+                      <small>可能重复：{memory.possible_duplicate_of}</small>
+                    ) : null}
+                    {memory.conflicts_with?.length ? (
+                      <small>
+                        可能冲突：{memory.conflicts_with.join(", ")}
+                      </small>
+                    ) : null}
+                    {memory.review_action ? (
+                      <small>
+                        审核：{memory.review_action} ·{" "}
+                        {memory.review_comment ?? "无意见"}
+                      </small>
+                    ) : null}
+                    {memory.status === "candidate" ? (
+                      <div className="review-actions">
+                        <button
+                          className="primary-button"
+                          onClick={() => memoryAction(memory, "approve")}
+                        >
+                          批准沉淀
+                        </button>
+                        <button
+                          className="danger-button"
+                          onClick={() => memoryAction(memory, "reject")}
+                        >
+                          驳回候选
+                        </button>
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </>
+            ) : (
+              <Empty icon="✓" text="当前没有待审核的原子记忆候选。" />
+            )}
+          </div>
+        </section>
+      </main>
+    </div>
+  );
 }
-function Metric({ label, value, caption, tone }: { label: string; value: string; caption: string; tone: string }) { return <article className={`metric-card ${tone}`}><p>{label}</p><strong>{value}</strong><small>{caption}</small></article>; }
-function MemoryList({ items }: { items: MemoryItem[] }) { return <div className="memory-list">{items.map(item => <article key={item.memory_id}><div><code>{item.memory_id}</code><span className={`memory-status ${item.status}`}>{item.status}</span></div><p>{item.content || item.summary || "记忆正文未加载"}</p>{item.summary && item.content && item.summary !== item.content ? <small>摘要：{item.summary}</small> : null}{item.content_truncated ? <small>正文按任务内记忆预算截断；完整记录仅供审核接口查看。</small> : null}<small>类型：{item.kind ?? "risk_pattern"} · 修订 v{item.revision ?? 1}</small><small>证据：{item.evidence_ids.join(", ") || "无"}</small><small>来源任务：{item.origin_task_id ?? "人工维护"} · {item.reviewed_at ? `审核于 ${new Date(item.reviewed_at).toLocaleDateString("zh-CN")}` : "待审核"}</small>{item.possible_duplicate_of ? <small>可能重复：{item.possible_duplicate_of}（仅提示，需审核人裁决）</small> : null}{item.conflicts_with?.length ? <small>可能冲突：{item.conflicts_with.join(", ")}（不会自动覆盖已批准记忆）</small> : null}<small>适用范围：{Object.entries(item.scope ?? {}).filter(([, value]) => value).map(([key, value]) => `${key}: ${value}`).join(" · ") || "默认 workspace"}</small><small>置信度 {Math.round(item.confidence * 100)}% · {item.expires_at ? `失效 ${new Date(item.expires_at).toLocaleDateString("zh-CN")}` : "待审核"}</small></article>)}</div>; }
-function Empty({ icon, text }: { icon: string; text: string }) { return <div className="empty-state"><span>{icon}</span><p>{text}</p></div>; }
+function Metric({
+  label,
+  value,
+  caption,
+  tone,
+}: {
+  label: string;
+  value: string;
+  caption: string;
+  tone: string;
+}) {
+  return (
+    <article className={`metric-card ${tone}`}>
+      <p>{label}</p>
+      <strong>{value}</strong>
+      <small>{caption}</small>
+    </article>
+  );
+}
+
+function AnalysisPage({ result }: { result?: RuntimeResult }) {
+  const snapshot = result?.analysis_snapshot;
+  if (!snapshot) {
+    return <div className="card full-card"><div className="section-heading"><div><p className="eyebrow">INVESTIGATION WORKSPACE</p><h2>异常分析</h2></div></div><Empty icon="⌁" text="Agent 运行运营数据分析工具后，将展示确定性指标和调查假设。" /></div>;
+  }
+  return <div className="analysis-layout">
+    <div className="card full-card"><div className="section-heading"><div><p className="eyebrow">SIMULATED OPERATIONAL DATA</p><h2>销量与库存趋势</h2></div><span className="badge neutral">模拟数据</span></div><p className="memory-summary">{snapshot.description}</p><div className="analysis-chart"><ResponsiveContainer width="100%" height={300}><LineChart data={snapshot.series}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickFormatter={(value) => value.slice(5)} /><YAxis yAxisId="sales" /><YAxis yAxisId="inventory" orientation="right" /><Tooltip /><Legend /><Line yAxisId="sales" type="monotone" dataKey="sales" name="日销量" stroke="#3b82f6" strokeWidth={3} /><Line yAxisId="inventory" type="monotone" dataKey="inventory" name="库存" stroke="#f97316" strokeWidth={3} /></LineChart></ResponsiveContainer></div></div>
+    <div className="card"><div className="section-heading"><div><p className="eyebrow">ANOMALY METRICS</p><h2>异常指标</h2></div></div><div className="strategy-table"><div className="strategy-header"><span>指标</span><span>基线</span><span>当前</span><span>变化</span></div>{snapshot.results.map((item) => <div className="strategy-row" key={item.analysis_id}><strong>{item.metric}<small>{item.summary}</small></strong><span>{item.baseline ?? "—"}</span><span>{item.current ?? "—"}</span><span>{item.change_ratio === undefined ? "—" : percent(item.change_ratio)} · {item.severity}</span></div>)}</div></div>
+    <div className="card"><div className="section-heading"><div><p className="eyebrow">STRUCTURED INVESTIGATION STATE</p><h2>调查假设</h2></div><span className={`badge ${result?.investigation_status?.ready_for_decision ? "neutral" : "warning"}`}>{result?.investigation_status?.ready_for_decision ? "可进入决策" : "仍需补证"}</span></div><p className="memory-summary">{result?.investigation_status?.summary}</p><div className="signal-list">{result?.hypotheses?.map((item) => <div className="signal" key={item.hypothesis_id}><span className="signal-icon">{item.status === "supported" ? "✓" : item.status === "conflicting" ? "!" : "—"}</span><div><strong>{item.hypothesis_id}</strong><p>{item.reason}</p><small>Evidence: {item.evidence_ids.join(", ") || "待补证"} · Confidence {percent(item.confidence)}</small></div><b>{item.status}</b></div>)}</div></div>
+    <div className="card"><div className="section-heading"><div><p className="eyebrow">DECISION COMPARISON</p><h2>策略比较</h2></div></div>{result?.decision ? <div className="strategy-table">{result.decision.strategies.map((item) => <div className="strategy-row" key={item.strategy}><strong>{item.strategy}</strong><span>{item.replenishment_quantity} 件</span><span>{percent(item.service_level)} 服务水平</span><span>{money(item.expected_total_cost)}</span></div>)}</div> : <Empty icon="▦" text="调查状态收敛后显示三种补货策略。" />}</div>
+  </div>;
+}
+function MemoryList({ items }: { items: MemoryItem[] }) {
+  return (
+    <div className="memory-list">
+      {items.map((item) => (
+        <article key={item.memory_id}>
+          <div>
+            <code>{item.memory_id}</code>
+            <span className={`memory-status ${item.status}`}>
+              {item.status}
+            </span>
+          </div>
+          <p>{item.content || item.summary || "记忆正文未加载"}</p>
+          {item.summary && item.content && item.summary !== item.content ? (
+            <small>摘要：{item.summary}</small>
+          ) : null}
+          {item.content_truncated ? (
+            <small>正文按任务内记忆预算截断；完整记录仅供审核接口查看。</small>
+          ) : null}
+          <small>
+            类型：{item.kind ?? "risk_pattern"} · 修订 v{item.revision ?? 1}
+          </small>
+          <small>证据：{item.evidence_ids.join(", ") || "无"}</small>
+          <small>
+            来源任务：{item.origin_task_id ?? "人工维护"} ·{" "}
+            {item.reviewed_at
+              ? `审核于 ${new Date(item.reviewed_at).toLocaleDateString("zh-CN")}`
+              : "待审核"}
+          </small>
+          {item.possible_duplicate_of ? (
+            <small>
+              可能重复：{item.possible_duplicate_of}（仅提示，需审核人裁决）
+            </small>
+          ) : null}
+          {item.conflicts_with?.length ? (
+            <small>
+              可能冲突：{item.conflicts_with.join(", ")}
+              （不会自动覆盖已批准记忆）
+            </small>
+          ) : null}
+          <small>
+            适用范围：
+            {Object.entries(item.scope ?? {})
+              .filter(([, value]) => value)
+              .map(([key, value]) => `${key}: ${value}`)
+              .join(" · ") || "默认 workspace"}
+          </small>
+          <small>
+            置信度 {Math.round(item.confidence * 100)}% ·{" "}
+            {item.expires_at
+              ? `失效 ${new Date(item.expires_at).toLocaleDateString("zh-CN")}`
+              : "待审核"}
+          </small>
+        </article>
+      ))}
+    </div>
+  );
+}
+function Empty({ icon, text }: { icon: string; text: string }) {
+  return (
+    <div className="empty-state">
+      <span>{icon}</span>
+      <p>{text}</p>
+    </div>
+  );
+}
 createRoot(document.getElementById("root")!).render(<App />);

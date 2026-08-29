@@ -18,10 +18,33 @@ class ResearchPlan(BaseModel):
 class AgentAction(BaseModel):
     """A bounded tool decision, deliberately excluding chain-of-thought."""
     tool: Literal[
-        "retrieve_evidence", "assess_evidence_gap", "run_decision_analysis",
+        "retrieve_evidence", "analyze_operational_data", "assess_investigation_status", "run_decision_analysis",
         "request_human_review", "finish",
     ]
+    focus: Literal["all", "inventory", "demand", "delivery", "cost"] = "all"
     reason: str = Field(min_length=3, max_length=240)
+
+
+class InvestigationHypothesis(BaseModel):
+    """Auditable investigation state; deliberately not free-form model reasoning."""
+    hypothesis_id: Literal["demand", "inventory", "delivery", "cost"]
+    status: Literal["unknown", "supported", "refuted", "conflicting"] = "unknown"
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    analysis_ids: list[str] = Field(default_factory=list)
+    missing_information: list[str] = Field(default_factory=list)
+    reason: str = Field(default="尚未完成调查。", max_length=500)
+
+
+class AnalysisResult(BaseModel):
+    analysis_id: str
+    metric: Literal["demand", "inventory", "delivery", "promotion"]
+    baseline: float | None = None
+    current: float | None = None
+    change_ratio: float | None = None
+    anomaly: bool
+    severity: Literal["low", "medium", "high"]
+    summary: str
 
 
 class FulfillmentScope(BaseModel):

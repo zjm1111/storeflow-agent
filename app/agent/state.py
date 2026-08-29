@@ -56,6 +56,10 @@ class ResearchState(TypedDict, total=False):
     review_requested: bool
     graph_execution: dict
     context_telemetry: list[dict]
+    hypotheses: list[dict]
+    analysis_snapshot: dict
+    investigation_status: dict
+    unresolved_conflicts: list[dict]
 
 
 def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope: dict | None = None, constraints: dict | None = None, idempotency_key: str | None = None) -> ResearchState:
@@ -87,6 +91,13 @@ def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope
         # this run id and the task-id thread; this is only a task projection.
         "graph_execution": {},
         "context_telemetry": [],
+        "hypotheses": [
+            {"hypothesis_id": name, "status": "unknown", "confidence": 0.0, "evidence_ids": [], "analysis_ids": [], "missing_information": [f"需要核验{name}风险"], "reason": "尚未完成调查。"}
+            for name in ("demand", "inventory", "delivery", "cost")
+        ],
+        "analysis_snapshot": {"dataset": "simulated_retail_operational_dataset", "results": [], "series": []},
+        "investigation_status": {"ready_for_decision": False, "summary": "尚未完成调查。"},
+        "unresolved_conflicts": [],
         "question": question,
         "plan": None,
         "sources": [],

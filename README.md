@@ -1,23 +1,24 @@
-# StoreFlow：连锁零售补货风险决策 Agent
+# StoreFlow：供应链异常调查与补货决策 Agent
 
-StoreFlow 服务于连锁零售企业的区域采购负责人。在促销、天气、中央仓到货延迟、库存不足与销量波动同时出现时，它汇集可追溯证据、识别风险、比较补货方案，并交由负责人审核。
+StoreFlow 服务于连锁零售企业的区域采购负责人。当促销、天气、中央仓到货延迟、库存不足与销量波动同时出现时，它以“调查 → 核验 → 决策 → 人审”为主线，汇集当前证据与确定性运营分析，形成可审核的补货建议。
 
 固定范围：**单区域 / 单门店 / 单 SKU / 单补货周期**。默认演示为瓶装饮料。系统只生成采购建议草案：不连接 ERP，不创建采购单，不扣减库存，也不宣称生产级预测或多 SKU 优化能力。
 
 ## 为什么不是普通 RAG
 
-StoreFlow 是受限自治 Agent：LangGraph 控制“选择下一步 → 调用白名单复合工具 → Observation → 再规划”的循环。Manager 只可选择取证、评估证据缺口、决策分析、提交审核或结束；一次取证工具内部并行采集内部资料、公开风险和已批准记忆，其中当前 Source 经 RRF、重排与压缩形成证据，Memory 则经 scope/TTL catalog 选择后作为受预算限制的历史 Prior。Agent 最多 6 步、最多 2 次检索；模型只返回结构化工具动作，不保存自由式思维链。关键订货量由固定种子 Monte Carlo 与 OR-Tools 计算，决策草案会自动进入人工审核。
+StoreFlow 是单 Manager 的受限 ReAct Agent：LangGraph 控制“选择下一步 → 调用白名单复合工具 → Observation → 再规划”的循环。Manager 可选择取证、确定性运营分析、调查状态评估、决策分析、提交审核或结束；第二次取证会围绕库存、需求、配送或成本中的未解决假设定向补证。Agent 最多 6 步、最多 2 次检索；模型只返回结构化工具动作，不保存自由式思维链。关键订货量由固定种子 Monte Carlo 与 OR-Tools 计算，决策草案会自动进入人工审核。
 
 ```mermaid
 flowchart LR
   A[门店资料 / 采购问题] --> B[受限 Agent]
   B --> C[并行证据采集]
   C --> D[RRF + 精排 + 上下文压缩]
-  D --> E[RiskEvent]
-  E --> F[Monte Carlo + OR-Tools 三策略]
-  F --> G{采购负责人审核}
-  G -->|批准| H[建议草案 + 经审核长期记忆]
-  G -->|补证/改约束| B
+  D --> E[运营数据分析 + 调查假设]
+  E --> F[RiskEvent]
+  F --> G[Monte Carlo + OR-Tools 三策略]
+  G --> H{采购负责人审核}
+  H -->|批准| I[建议草案 + 经审核长期记忆]
+  H -->|补证/改约束| B
 ```
 
 ## 已实现
@@ -26,6 +27,7 @@ flowchart LR
 - Evidence ID 约束的风险事件；冲突来源保持待裁决，不自动变成事实。
 - 工作记忆、情景任务快照与仅审核后可复用的长期业务记忆；长期记忆先选择轻量 summary catalog，再受独立 token 预算加载少量正文，替代版本只在新候选批准时原子切换。长期记忆分为 episodic（历史案例）、semantic（稳定事实）与 procedural（审核规则）；Agent 只能自动提出 episodic 候选，procedural 仅允许 reviewer/admin 人工创建。
 - 三种明确风险偏好的订货策略：成本优先、平衡型、服务优先；展示成本、服务水平、缺货概率、CVaR 与约束可行性。
+- 内置且明确标注的模拟运营数据：确定性计算需求偏离、促销 uplift、库存覆盖天数和提前期偏离；调查假设始终以结构化状态展示，不展示私有推理链。
 - LangGraph interrupt + MySQL checkpoint 的持久化 HITL；Celery + Redis Streams 的异步任务和可续传 SSE。
 - JWT/RBAC、SSRF 防护、JSON 日志、Prometheus 指标、Docker Compose。
 - 冻结模拟评测：48 个问题、96 条金标 Evidence、12 条同义问法、48 条无关干扰与 24 条跨维度/冲突资料（共 168 文档）；以本地 BM25、哈希向量和 RRF+本地 rerank 的离线指标对比，详见 [评测集说明](docs/evaluation-dataset.md)。
@@ -47,7 +49,7 @@ docker compose ps
 
 ## 固定 Demo
 
-“周末暴雨 + 饮料促销 + 中央仓配送延迟 + 门店库存仅够 1.5 天”。完整步骤见 [Demo 运行手册](docs/demo-runbook.md)，一键验收：
+“上海浦东门店瓶装饮料近期出现缺货风险，请调查促销、库存和中央仓配送是否构成主要风险，并给出本周期补货建议。”完整步骤见 [Demo 运行手册](docs/demo-runbook.md)，一键验收：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\v2_demo_smoke.py --base-url http://127.0.0.1:5174/api

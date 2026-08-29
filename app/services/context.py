@@ -152,7 +152,7 @@ def _historical_prior_projection(state: dict, budget_tokens: int) -> tuple[list[
 def build_controller_context(state: dict) -> dict:
     """Project only Manager-relevant state for bounded ReAct tool selection."""
     policy = context_budget_policy()
-    actions = [{key: item.get(key) for key in ("tool", "status", "observation", "action_id")} for item in state.get("agent_actions", [])]
+    actions = [{key: item.get(key) for key in ("tool", "focus", "status", "observation", "action_id")} for item in state.get("agent_actions", [])]
     working = {
         "question": state.get("question"),
         "scope": state.get("scope", {}),
@@ -162,6 +162,12 @@ def build_controller_context(state: dict) -> dict:
         "external_searches": state.get("external_searches", 0),
         "remaining_steps": max(0, state.get("max_loop", 6) - len(actions)),
         "remaining_external_searches": max(0, state.get("max_search", 2) - state.get("external_searches", 0)),
+        "investigation": {
+            "hypotheses": [{key: item.get(key) for key in ("hypothesis_id", "status", "confidence", "missing_information")} for item in state.get("hypotheses", [])],
+            "analysis": [{key: item.get(key) for key in ("analysis_id", "metric", "anomaly", "severity", "summary")} for item in state.get("analysis_snapshot", {}).get("results", [])],
+            "unresolved_conflicts": state.get("unresolved_conflicts", []),
+            "status": state.get("investigation_status", {}),
+        },
     }
     # Working state is small by design. If a future caller adds verbose fields,
     # retain a bounded JSON representation rather than spilling it into prompt.
