@@ -14,34 +14,23 @@ State 不会整体传入模型。`build_controller_context()` 只投影问题、
 
 ```mermaid
 flowchart TD
-  A[采购问题和业务约束] --> B[ReAct Manager]
-  B --> C{高层动作}
-  C -->|retrieve evidence| D[复合检索工具]
-  D --> D1[内部 PDF Child Chunk: BM25 和向量]
-  D --> D2[近期公开风险: Tavily]
-  D --> D3[已批准长期记忆: scope 和 TTL]
-  D1 --> E[Source RRF: rerank: 去重: 上下文压缩]
-  D2 --> E
-  E --> F[Evidence ID 和 Context Pack]
-  D3 --> G[Historical Prior Top-K]
-  F --> H[受控 Observation]
-  G --> H
-  H --> B
-  C -->|analyze operational data| G[确定性销量、库存、提前期与促销异常分析]
-  G --> H
-  C -->|assess investigation status| I[假设状态、覆盖缺口与冲突判断]
-  I --> H
-  G --> B
-  C -->|run decision analysis| H[RiskEvent]
-  H --> I[固定种子 Monte Carlo]
-  I --> J[OR-Tools 三种风险偏好]
-  J --> K[三策略 KPI 和建议草案]
-  K --> B
-  C -->|request human review or finish| L[LangGraph interrupt]
-  L --> M[MySQL LangGraph Checkpointer: awaiting review]
-  M -->|批准| N[审批式长期记忆]
-  M -->|改约束或补证| B
-  M -->|拒绝| O[审计结束]
+  Question[采购问题和业务约束] --> Manager[Bounded ReAct Manager]
+  Manager --> Action{Schema-validated action}
+  Action -->|retrieve evidence| Retrieval[Composite retrieval]
+  Retrieval --> Evidence[Evidence context pack]
+  Action -->|analyze data| Analysis[Deterministic operational analysis]
+  Action -->|assess status| Assessment[Hypotheses, gaps and conflicts]
+  Evidence --> Observation[Controlled observation]
+  Analysis --> Observation
+  Assessment --> Observation
+  Observation --> Manager
+  Action -->|decision, guarded| Decision[Monte Carlo and OR-Tools]
+  Decision --> Review[HITL 1: decision review]
+  Review -->|approve| Candidates[Atomic memory candidates]
+  Candidates --> MemoryReview[HITL 2: memory review]
+  MemoryReview --> Prior[Approved historical prior]
+  Prior --> Manager
+  Review -->|need evidence| Manager
 ```
 
 ## 动作级恢复语义

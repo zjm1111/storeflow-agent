@@ -328,6 +328,7 @@ function App() {
     () => localStorage.getItem("supplymind_access_token") ?? "",
   );
   const result = task?.result as RuntimeResult | undefined;
+  const pendingMemoryCandidates = (result?.memory_candidates ?? []).filter((item) => item.status === "candidate").length;
   const riskScore = useMemo(
     () =>
       Math.min(
@@ -717,7 +718,7 @@ function App() {
               ["workflow", "Agent 调查", "◌"],
               ["analysis", "异常分析", "⌁"],
               ["evidence", "证据中心", "◇"],
-              ["memory", "记忆与上下文", "◫"],
+              ["memory", `记忆与上下文${pendingMemoryCandidates ? ` · ${pendingMemoryCandidates}` : ""}`, "◫"],
               ["review", "采购审核", "✓"],
             ] as const
           ).map(([key, name, icon]) => (
@@ -728,7 +729,7 @@ function App() {
             >
               <span>{icon}</span>
               {name}
-              {key === "review" && task?.status === "awaiting_review" ? (
+              {(key === "review" && task?.status === "awaiting_review") || (key === "memory" && pendingMemoryCandidates) ? (
                 <i />
               ) : null}
             </button>
@@ -791,17 +792,23 @@ function App() {
             <button onClick={() => setError("")}>×</button>
           </div>
         )}
+        {task?.status === "approved" && pendingMemoryCandidates > 0 && (
+          <div className="alert">
+            <span>✓</span><div><strong>补货方案已批准</strong><p>系统已生成 {pendingMemoryCandidates} 条可复用历史经验候选；它们不会自动进入长期记忆，仍需逐条审核。</p></div>
+            <button onClick={() => setView("memory")}>前往长期记忆审核 →</button>
+          </div>
+        )}
         <section className="hero-grid">
           <div className="new-task card">
             <div className="section-heading">
               <div>
-                <p className="eyebrow">NEW PURCHASE DRAFT</p>
-                <h2>创建门店补货任务</h2>
+                <p className="eyebrow">NEW INVESTIGATION</p>
+                <h2>创建异常调查任务</h2>
               </div>
               <span className="badge neutral">Bounded Agent</span>
             </div>
             <form onSubmit={submit}>
-              <label htmlFor="question">描述采购决策问题</label>
+              <label htmlFor="question">描述异常现象与调查目标</label>
               <textarea
                 id="question"
                 value={question}
@@ -1388,7 +1395,7 @@ function App() {
                 />
               )}
             </div>
-            <div className="card memory-candidate">
+            {false && <div className="card memory-candidate">
               <div className="section-heading">
                 <div>
                   <p className="eyebrow">REVIEW-GATED MEMORY</p>
@@ -1402,7 +1409,7 @@ function App() {
               </div>
               {result?.memory_candidate ? (
                 <>
-                  <MemoryList items={[result.memory_candidate]} />
+                  <MemoryList items={[result!.memory_candidate!]} />
                   <label>
                     替换内容
                     <input
@@ -1417,7 +1424,7 @@ function App() {
                     <button
                       className="primary-button"
                       onClick={() =>
-                        memoryAction(result.memory_candidate!, "approve")
+                        memoryAction(result!.memory_candidate!, "approve")
                       }
                     >
                       批准沉淀
@@ -1425,7 +1432,7 @@ function App() {
                     <button
                       className="secondary-button"
                       onClick={() =>
-                        memoryAction(result.memory_candidate!, "supersede")
+                        memoryAction(result!.memory_candidate!, "supersede")
                       }
                     >
                       替换候选
@@ -1433,7 +1440,7 @@ function App() {
                     <button
                       className="danger-button"
                       onClick={() =>
-                        memoryAction(result.memory_candidate!, "expire")
+                        memoryAction(result!.memory_candidate!, "expire")
                       }
                     >
                       驳回并过期
@@ -1446,7 +1453,7 @@ function App() {
                   "rejected" ? (
                     <small>
                       未生成候选：
-                      {result.memory_candidate_extraction.reasons.join("、")}
+                      {result!.memory_candidate_extraction!.reasons.join("、")}
                       。临时事实、日志和无证据事件不会沉淀。
                     </small>
                   ) : null}
@@ -1456,7 +1463,7 @@ function App() {
                   />
                 </>
               )}
-            </div>
+            </div>}
           </div>
         </section>
         <section className={`workspace ${view === "review" ? "show" : ""}`}>

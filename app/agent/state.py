@@ -85,7 +85,7 @@ def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope
         "external_searches": 0,
         "agent_finished": False,
         "model_decision_count": 0,
-        "max_model_decisions": 2,
+        "max_model_decisions": 4,
         "review_requested": False,
         # Populated by ResearchService. LangGraph owns graph recovery using
         # this run id and the task-id thread; this is only a task projection.

@@ -1,0 +1,4 @@
+[
+  {"id":"demo_happy_path","question":"上海浦东门店瓶装饮料出现缺货风险，请调查并给出建议。","scope":{"region":"上海","store":"上海浦东门店","sku":"瓶装饮料"},"expected_tools":["retrieve_evidence","analyze_operational_data","assess_investigation_status","run_decision_analysis","request_human_review"]},
+  {"id":"outside_demo_scope","question":"北京朝阳门店瓶装饮料出现缺货风险，请调查并给出建议。","scope":{"region":"北京","store":"北京朝阳门店","sku":"瓶装饮料"},"expected_tools":["retrieve_evidence","analyze_operational_data","assess_investigation_status"]}
+]

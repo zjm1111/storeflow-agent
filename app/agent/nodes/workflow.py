@@ -155,16 +155,19 @@ def agent_decide_next_action(state: ResearchState) -> dict:
         client = BailianClient()
         if not client.settings.model_enabled:
             return _planned_action(state, fallback, {"context_telemetry": _record_context(state, observation, system_prompt=controller_system, mode="not_called"), "__recovery_message": "agent tool-choice fallback: BaiLian model is not configured"})
-        if state.get("model_decision_count", 0) >= state.get("max_model_decisions", 2):
-            return _planned_action(state, fallback, {"context_telemetry": _record_context(state, observation, system_prompt=controller_system, mode="not_called"), "__recovery_message": "agent tool-choice budget exhausted; continuing with deterministic policy"})
+        if state.get("model_decision_count", 0) >= state.get("max_model_decisions", 4):
+            return _planned_action(state, fallback, {"context_telemetry": _record_context(state, observation, system_prompt=controller_system, mode="policy_fallback"), "working_memory": {**state.get("working_memory", {}), "policy_events": [*state.get("working_memory", {}).get("policy_events", []), "manager choice budget exhausted; deterministic policy active"]}})
         try:
             generated, metadata = client.complete_json(
                 system=controller_system,
                 user=f"CONTROLLER_CONTEXT: {observation}", max_tokens=180,
             )
             action = AgentAction.model_validate(generated)
-            if action.tool == "run_decision_analysis" and not state.get("sources"):
-                raise ValueError("cannot decide before evidence is available")
+            if action.tool == "run_decision_analysis":
+                investigation = state.get("investigation_status", {})
+                assessed = any(item.get("tool") == "assess_investigation_status" and item.get("status") == "completed" for item in state.get("agent_actions", []))
+                if not state.get("sources") or not assessed or not (investigation.get("ready_for_decision") or investigation.get("degraded")):
+                    raise ValueError("cannot decide before a completed ready/degraded investigation assessment")
             if action.tool == "request_human_review" and not state.get("decision"):
                 raise ValueError("cannot request review before a decision draft exists")
             if action.tool == "finish" and not state.get("decision"):
@@ -291,14 +294,18 @@ def agent_execute_tool(state: ResearchState) -> dict:
                 update = {**retrieved, **parsed, **scored}
                 observation = f"{len(scored.get('evidence_context_pack', scored.get('context_pack', {})).get('items', []))} evidence selected; parallel lanes={','.join(scored.get('working_memory', {}).get('parallel_retrieval', {}).get('completed_lanes', []))}"
             elif tool == "analyze_operational_data":
-                snapshot = OperationalDataAnalyzer().analyze()
+                snapshot = OperationalDataAnalyzer().analyze(scope=state.get("scope"))
                 update = {"analysis_snapshot": snapshot}
-                observation = "; ".join(item["summary"] for item in snapshot["results"])
+                observation = "; ".join(item["summary"] for item in snapshot["results"]) if snapshot.get("available") else "operational analysis unavailable outside the fixed demo scope"
             elif tool == "assess_investigation_status":
                 update = assess_investigation_status(state)
                 status = update["investigation_status"]
                 observation = f"ready_for_decision={status['ready_for_decision']}; missing={','.join(status['missing_information']) or 'none'}; conflicts={len(update['unresolved_conflicts'])}"
             elif tool == "run_decision_analysis":
+                investigation = state.get("investigation_status", {})
+                assessed = any(item.get("tool") == "assess_investigation_status" and item.get("status") == "completed" for item in state.get("agent_actions", []))
+                if not assessed or not (investigation.get("ready_for_decision") or investigation.get("degraded")):
+                    raise ValueError("decision analysis requires completed investigation assessment with ready or degraded status")
                 events = extract_events(state)
                 report = generate_report({**state, **events})
                 decision = make_decision(report.get("events", events.get("events", [])), constraints=state.get("constraints", {}))

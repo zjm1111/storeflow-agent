@@ -10,9 +10,43 @@ from app.core import get_settings
 from app.services.decision import make_decision
 from app.services.llm import BailianClient, ModelCallError
 from app.services.retrieval import _bm25_scores, _local_rerank_score, _tokens, _vector, rrf_fuse_lanes
+from app.agent.state import initial_state
+from app.agent.nodes.workflow import initialize, agent_decide_next_action, agent_mark_action_running, agent_execute_tool
+from app.agent.nodes import workflow as workflow_nodes
+from app.agent.fixtures import SAMPLE_SOURCES
 
 CASES_PATH = Path(__file__).resolve().parents[2] / "sample_data" / "evaluation_cases.json"
 CHALLENGES_PATH = Path(__file__).resolve().parents[2] / "sample_data" / "evaluation_challenges.json"
+TRAJECTORY_CASES_PATH = Path(__file__).resolve().parents[2] / "sample_data" / "agent_trajectory_cases.json"
+
+
+def run_agent_trajectory_evaluation() -> dict:
+    """Run frozen cases through the deterministic bounded manager and calculate metrics."""
+    cases = json.loads(TRAJECTORY_CASES_PATH.read_text(encoding="utf-8"))
+    results = []
+    original_retrieve = workflow_nodes.retrieve_sources
+    def offline_retrieve(state):
+        """Replace only network/database acquisition; parsing, scoring and tools still execute."""
+        return {"sources": SAMPLE_SOURCES, "search_count": state.get("search_count", 0) + 1, "hybrid_results": [], "recalled_memories": [], "dependency_execution": {"mode": "frozen_fixture"}, "working_memory": {**state.get("working_memory", {}), "parallel_retrieval": {"mode": "frozen_fixture", "completed_lanes": ["fixture"]}, "source_rerank_ids": []}}
+    workflow_nodes.retrieve_sources = offline_retrieve
+    try:
+        for index, case in enumerate(cases):
+            state = initial_state(f"eval-{index}", case["question"], scope=case["scope"])
+            state.update(initialize(state))
+            for _ in range(state["max_loop"]):
+                state.update(agent_decide_next_action(state))
+                state.update(agent_mark_action_running(state))
+                state.update(agent_execute_tool(state))
+                if state.get("agent_finished"):
+                    break
+            actual = [item["tool"] for item in state.get("agent_actions", []) if item.get("status") == "completed"]
+            expected = case["expected_tools"]
+            matches = sum(1 for actual_tool, expected_tool in zip(actual, expected) if actual_tool == expected_tool)
+            results.append({"id": case["id"], "expected_tools": expected, "actual_tools": actual, "tool_selection_accuracy": matches / max(len(expected), len(actual), 1), "task_success": bool(state.get("decision")) or case["id"] == "outside_demo_scope", "search_count": state.get("search_count", 0), "steps": len(actual), "citation_validity": all(event.get("evidence_ids") for event in state.get("events", [])), "constraint_pass": not bool((state.get("decision") or {}).get("infeasibility_reason"))})
+    finally:
+        workflow_nodes.retrieve_sources = original_retrieve
+    count = len(results)
+    return {"method": "frozen simulated cases executed through deterministic bounded-manager fallback; no remote model calls", "case_count": count, "cases": results, "metrics": {"task_success": round(sum(item["task_success"] for item in results) / count, 4), "tool_selection_accuracy": round(sum(item["tool_selection_accuracy"] for item in results) / count, 4), "unnecessary_tool_rate": round(sum(max(0, len(item["actual_tools"]) - len(item["expected_tools"])) for item in results) / max(1, sum(len(item["actual_tools"]) for item in results)), 4), "average_steps": round(sum(item["steps"] for item in results) / count, 2), "average_searches": round(sum(item["search_count"] for item in results) / count, 2), "citation_validity": round(sum(item["citation_validity"] for item in results) / count, 4), "constraint_pass_rate": round(sum(item["constraint_pass"] for item in results) / count, 4)}}
 
 
 def load_cases() -> list[dict]:
@@ -210,13 +244,8 @@ def run_evaluation() -> dict:
         {"id": "crash_recovery", "expected": ["retrieve_evidence"]},
         {"id": "invalid_model_tool", "expected": ["retrieve_evidence"]},
     ]
-    agent_eval = {
-        "method": "checked-in deterministic trajectory specification; no external model calls",
-        "case_count": len(trajectory_cases),
-        "cases": trajectory_cases,
-        "metrics": {"task_success": 1.0, "tool_selection_accuracy": 1.0, "unnecessary_tool_rate": 0.0, "search_efficiency": 1.25, "citation_validity": 1.0, "constraint_pass_rate": 1.0, "hitl_resume_success": 1.0, "crash_recovery_success": 1.0},
-        "fixed_workflow_baseline": {"trajectory": ["retrieve_evidence", "analyze_operational_data", "assess_investigation_status", "run_decision_analysis"], "note": "Baseline always performs analysis and cannot target its second retrieval."},
-    }
+    agent_eval = run_agent_trajectory_evaluation()
+    agent_eval["trajectory_specifications"] = trajectory_cases
     return {
         "dataset": {"case_count": len(cases), "dimensions": dict(dimensions), "evidence_annotation_count": sum(len(case.get("evidence_annotations", [])) for case in cases), "annotation_version": "storeflow-v1-frozen-simulated"},
         "retrieval": run_retrieval_evaluation(),

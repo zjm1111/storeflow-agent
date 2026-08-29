@@ -1,6 +1,7 @@
 from app.agent.nodes.workflow import _targeted_query, assess_investigation_status
 from app.agent.state import initial_state
 from app.services.anomaly_analysis import OperationalDataAnalyzer
+from app.services.evaluation import run_agent_trajectory_evaluation
 
 
 def test_operational_analysis_is_deterministic_and_flags_demo_anomalies():
@@ -22,3 +23,16 @@ def test_assessment_exposes_unknown_hypotheses_and_targeted_delivery_query():
     assert delivery["status"] == "conflicting"
     assert "中央仓" in _targeted_query({**state, **assessed}, "delivery")
     assert assessed["investigation_status"]["ready_for_decision"] is False
+
+
+def test_operational_analysis_rejects_non_demo_scope():
+    result = OperationalDataAnalyzer().analyze(scope={"region": "北京", "store": "北京朝阳门店", "sku": "瓶装饮料"})
+    assert result["available"] is False
+    assert result["series"] == []
+
+
+def test_trajectory_evaluation_calculates_metrics_from_executed_actions():
+    report = run_agent_trajectory_evaluation()
+    assert report["case_count"] == 2
+    assert report["metrics"]["tool_selection_accuracy"] == 0.8
+    assert all("actual_tools" in item for item in report["cases"])

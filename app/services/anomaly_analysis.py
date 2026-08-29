@@ -10,8 +10,14 @@ _DATASET = Path(__file__).resolve().parents[2] / "sample_data" / "operational_me
 
 
 class OperationalDataAnalyzer:
-    def analyze(self) -> dict:
+    DEMO_SCOPE = {"region": "上海", "store": "上海浦东门店", "sku": "瓶装饮料"}
+
+    def analyze(self, *, scope: dict | None = None) -> dict:
         payload = json.loads(_DATASET.read_text(encoding="utf-8"))
+        scope = scope or self.DEMO_SCOPE
+        mismatches = {key: {"expected": value, "received": scope.get(key)} for key, value in self.DEMO_SCOPE.items() if scope.get(key) != value}
+        if mismatches:
+            return {"dataset": payload["dataset"], "description": payload["description"], "available": False, "scope": self.DEMO_SCOPE, "mismatches": mismatches, "series": [], "results": []}
         rows = payload["rows"]
         baseline_rows, current_rows = rows[-14:-3], rows[-3:]
         baseline_sales = sum(row["sales"] for row in baseline_rows) / len(baseline_rows)
@@ -30,4 +36,4 @@ class OperationalDataAnalyzer:
             AnalysisResult(analysis_id="AN-delivery", metric="delivery", baseline=round(baseline_lead, 1), current=round(current_lead, 1), change_ratio=round(current_lead / baseline_lead - 1, 3), anomaly=current_lead / baseline_lead >= 1.2, severity="high", summary=f"预计提前期较基线延长 {current_lead / baseline_lead - 1:.1%}。"),
             AnalysisResult(analysis_id="AN-promotion", metric="promotion", baseline=round(baseline_sales, 1), current=round(promotion_sales, 1), change_ratio=round(promotion_sales / baseline_sales - 1, 3), anomaly=promotion_sales / baseline_sales >= 1.15, severity="medium", summary=f"促销窗口销量较基线提升 {promotion_sales / baseline_sales - 1:.1%}。"),
         ]
-        return {"dataset": payload["dataset"], "description": payload["description"], "series": rows, "results": [result.model_dump() for result in results]}
+        return {"dataset": payload["dataset"], "description": payload["description"], "available": True, "scope": self.DEMO_SCOPE, "series": rows, "results": [result.model_dump() for result in results]}

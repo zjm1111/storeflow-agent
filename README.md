@@ -21,6 +21,22 @@ flowchart LR
   H -->|补证/改约束| B
 ```
 
+## Agent Runtime
+
+```mermaid
+flowchart TD
+  Start --> Initialize
+  Initialize --> Manager[Bounded Manager]
+  Manager --> Planned[Persist planned action]
+  Planned --> Running[Mark running]
+  Running --> Tool[Composite tool]
+  Tool --> Observation[Structured observation]
+  Observation -->|continue| Manager
+  Observation -->|finish| Review[Durable HITL]
+```
+
+Runtime policy: tool whitelist、schema validation、`max_loop=6`、`max_search=2`、`max_model_decisions=4`、action idempotency 和 LangGraph checkpoint。
+
 ## 已实现
 
 - 内部长 PDF 使用 Parent–Child 分块：约 300–500 token 的 Child 完成 BM25/向量、RRF 与重排序；命中后按 `parent_id` 回溯受预算限制的 Parent 上下文。Tavily/网页按约 300–500 token 的临时 Chunk 进行 BM25/向量、RRF 与重排序，不写入内部知识库。Evidence 始终引用精确 Chunk，并保留页码或字符偏移。已批准记忆保持独立的历史 Prior 边界。
@@ -60,6 +76,9 @@ docker compose ps
 - [产品定位与业务边界](docs/storeflow-positioning.md)
 - [控制台使用手册](docs/user-guide.md)
 - [架构与状态机](docs/architecture.md)
+- [调查引擎](docs/investigation-engine.md)
+- [双层 HITL 与长期记忆](docs/memory-hitl.md)
+- [持久化与恢复](docs/persistence-recovery.md)
 - [学习地图：RAG、记忆、上下文与 Agent](docs/learning-architecture-guide.md)
 - [故障降级矩阵](docs/fallback-matrix.md)
 - [评测集与回归说明](docs/evaluation-dataset.md)
