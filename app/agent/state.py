@@ -44,7 +44,6 @@ class ResearchState(TypedDict, total=False):
     memory_conflicts: list[dict]
     memory_candidate_extraction: dict
     memory_candidates: list[dict]
-    context_pack: dict
     evidence_context_pack: dict
     agent_actions: list[dict]
     next_action: dict | None
@@ -75,10 +74,7 @@ def initial_state(task_id: str, question: str, workspace_id: str = "demo", scope
         "recalled_memories": [],
         "situational_memories": [],
         "memory_conflicts": [],
-        # ``context_pack`` is a deprecated API compatibility alias. Only the
-        # explicitly named evidence pack is current factual model context.
         "evidence_context_pack": {"kind": "current_evidence", "budget_tokens": evidence_budget, "used_tokens": 0, "items": []},
-        "context_pack": {"kind": "current_evidence", "budget_tokens": evidence_budget, "used_tokens": 0, "items": []},
         "agent_actions": [],
         "next_action": None,
         "active_action": None,

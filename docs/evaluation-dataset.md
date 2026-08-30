@@ -13,7 +13,7 @@
 .\.venv\Scripts\python.exe -m pytest tests\test_evaluation.py -q
 ```
 
-`GET /api/tasks/evaluations/run` 会在该冻结模拟语料上比较本地 BM25、哈希向量、RRF + 本地 rerank，输出主问题和同义问法上的宏平均 Recall@8、MRR、NDCG@8、Precision@8 以及四个风险维度明细。它不调用百炼、Tavily 或真实企业资料，结果只能表述为“冻结模拟语料上的离线确定性评测”，不能推断线上企业效果。
+`GET /api/tasks/evaluations/run` 会在该冻结模拟语料上比较 BM25、确定性 hash-vector 基线、RRF + 本地 rerank，输出主问题和同义问法上的宏平均 Recall@8、MRR、NDCG@8、Precision@8 以及四个风险维度明细。运行时无真实 embedding 的演示检索默认使用 BM25 + 本地 explainable rerank；hash-vector 仅保留为评测基线。它不调用百炼、Tavily 或真实企业资料，结果只能表述为“冻结模拟语料上的离线确定性评测”，不能推断线上企业效果。
 
 若明确配置百炼并接受外部调用成本，可主动运行：
 

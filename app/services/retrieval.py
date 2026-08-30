@@ -296,12 +296,19 @@ class HybridRetriever:
             "vector_score": round(float(vectors.get(item["source_id"], 0)), 3),
         } for i, item in enumerate(sources)]
         bm25_ranks = {item["source_id"]: index + 1 for index, item in enumerate(sorted(results, key=lambda item: item["bm25_score"], reverse=True))}
+        if not get_settings().model_enabled or not vectors:
+            for result in results:
+                result["rrf_score"] = None
+                result["rerank_score"] = result["bm25_score"]
+                result["retrieval_mode"] = "bm25_fallback"
+            return sorted(results, key=lambda item: item["rerank_score"], reverse=True)
         vector_ranks = {item["source_id"]: index + 1 for index, item in enumerate(sorted(results, key=lambda item: item["vector_score"], reverse=True))}
         rrf_k = 60
         for result in results:
             result["rrf_score"] = round(1 / (rrf_k + bm25_ranks[result["source_id"]]) + 1 / (rrf_k + vector_ranks[result["source_id"]]), 6)
-            # ``rerank_score`` is a compatibility alias consumed by the UI.
+            # This is the pre-rerank score consumed by the final local/remote reranker.
             result["rerank_score"] = result["rrf_score"]
+            result["retrieval_mode"] = "hybrid_rrf"
         return sorted(results, key=lambda item: item["rerank_score"], reverse=True)
 
     def _rerank(self, query: str, sources: list[dict], ranked: list[dict], errors: list[str]) -> list[dict]:
@@ -382,15 +389,16 @@ class HybridRetriever:
         # internal Qdrant collection so a fetched news page never becomes
         # accidental private knowledge for a later task.
         sources = self._public_child_chunks(sources)
-        try:
-            vectors_to_upsert, embedding_error = self._embed([item["content"] for item in sources])
-            if embedding_error: errors.append(embedding_error)
-            query_vector, query_error = self._embed([query])
-            if query_error and query_error not in errors: errors.append(query_error)
-            vectors = {source["source_id"]: _cosine_similarity(vector, query_vector[0]) for source, vector in zip(sources, vectors_to_upsert)}
-        except Exception as exc:
-            vectors = {}
-            errors.append(f"public chunk vector fallback: {type(exc).__name__}")
+        vectors: dict[str, float] = {}
+        if get_settings().model_enabled:
+            try:
+                vectors_to_upsert, embedding_error = self._embed([item["content"] for item in sources])
+                if embedding_error: errors.append(embedding_error)
+                query_vector, query_error = self._embed([query])
+                if query_error and query_error not in errors: errors.append(query_error)
+                vectors = {source["source_id"]: _cosine_similarity(vector, query_vector[0]) for source, vector in zip(sources, vectors_to_upsert)}
+            except Exception as exc:
+                errors.append(f"public chunk vector fallback: {type(exc).__name__}")
         return sources, self._rerank(query, sources, self._rank(query, sources, vectors), errors), errors
 
     def _knowledge_sources(self) -> list[dict]:
@@ -423,9 +431,11 @@ class HybridRetriever:
             sources = self._knowledge_sources()
             if not sources:
                 return [], []
-            query_vector, _ = self._embed([query])
-            response = self._qdrant(f"/collections/{getattr(self, 'collection', COLLECTION)}/points/search", {"vector": query_vector[0], "limit": len(sources), "with_payload": True})
-            vectors = {point["payload"]["source_id"]: point["score"] for point in response["result"]}
+            vectors: dict[str, float] = {}
+            if get_settings().model_enabled:
+                query_vector, _ = self._embed([query])
+                response = self._qdrant(f"/collections/{getattr(self, 'collection', COLLECTION)}/points/search", {"vector": query_vector[0], "limit": len(sources), "with_payload": True})
+                vectors = {point["payload"]["source_id"]: point["score"] for point in response["result"]}
             ranked = self._rerank(query, sources, self._rank(query, sources, vectors), [])[:limit]
             by_id = {source["source_id"]: source for source in sources}
             return [by_id[item["source_id"]] for item in ranked], ranked

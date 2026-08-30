@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import secrets
 import time
 from uuid import uuid4
 
@@ -45,10 +44,6 @@ class ProductionControlsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         settings = get_settings()
         request_id = request.headers.get("X-Request-ID") or str(uuid4())
-        if request.url.path not in PUBLIC_PATHS and settings.api_key:
-            supplied = request.headers.get("X-API-Key", "")
-            if not secrets.compare_digest(supplied, settings.api_key):
-                return JSONResponse({"error": {"code": "unauthorized", "message": "Valid X-API-Key is required", "request_id": request_id}}, status_code=401, headers={"X-Request-ID": request_id})
         if request.url.path not in PUBLIC_PATHS and not self._within_rate_limit(request):
             return JSONResponse({"error": {"code": "rate_limited", "message": "Request rate limit exceeded", "request_id": request_id}}, status_code=429, headers={"X-Request-ID": request_id, "Retry-After": "60"})
         started = time.perf_counter()

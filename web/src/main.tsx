@@ -171,7 +171,6 @@ type Result = {
     source_id?: string;
   }[];
   evidence_context_pack?: ContextPack;
-  context_pack?: ContextPack;
   working_memory?: {
     queries?: string[];
     coverage_gaps?: string[];
@@ -198,7 +197,6 @@ type Result = {
   }[];
   recalled_memories?: MemoryItem[];
   memory_conflicts?: { memory_id: string; reason: string }[];
-  memory_candidate?: MemoryItem;
   memory_candidates?: MemoryItem[];
   memory_candidate_extraction?: MemoryCandidateExtraction;
   agent_actions?: {
@@ -321,7 +319,6 @@ function App() {
   const [knowledgeResults, setKnowledgeResults] = useState<HybridResult[]>([]);
   const [reviewComment, setReviewComment] = useState("");
   const [constraintText, setConstraintText] = useState('{"budget": 1500}');
-  const [replacementText, setReplacementText] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [accessToken, setAccessToken] = useState(
@@ -554,34 +551,18 @@ function App() {
     if (!task) return;
     await fetchTaskResult(task.task_id);
   }
-  async function runDecision() {
-    if (!task) return;
-    setError("");
-    try {
-      const response = await fetch(
-        `${apiBase}/tasks/${task.task_id}/decision`,
-        { method: "POST", headers: authHeaders() },
-      );
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.detail ?? "决策计算失败");
-      await refreshTask();
-      setView("review");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "决策计算失败");
-    }
-  }
   async function review(
-    action: "approve" | "modify-constraints" | "need-more-evidence" | "reject",
+    action: "approve" | "modify_constraints" | "need_more_evidence" | "reject",
   ) {
     if (!task) return;
     setError("");
     try {
       const constraints =
-        action === "modify-constraints"
+        action === "modify_constraints"
           ? JSON.parse(constraintText)
           : undefined;
       const response = await fetch(
-        `${apiBase}/tasks/${task.task_id}/review/${action}`,
+        `${apiBase}/tasks/${task.task_id}/review?action=${action}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -655,16 +636,11 @@ function App() {
   }
   async function memoryAction(
     memory: MemoryItem,
-    action: "approve" | "reject" | "expire" | "supersede",
+    action: "approve" | "reject",
   ) {
     setError("");
     try {
-      const body =
-        action === "supersede"
-          ? { replacement_content: replacementText }
-          : { comment: reviewComment || null };
-      if (action === "supersede" && !replacementText.trim())
-        throw new Error("请填写替换后的记忆内容");
+      const body = { comment: reviewComment || null };
       if (action === "reject" && reviewComment.trim().length < 3)
         throw new Error("请填写至少 3 个字符的驳回原因");
       const response = await fetch(
@@ -677,25 +653,13 @@ function App() {
       );
       const updated = await response.json();
       if (!response.ok) throw new Error(updated.detail ?? "记忆审核操作失败");
-      setReplacementText("");
-      if (action !== "supersede")
-        setTask((current) => {
-          if (!current?.result) return current;
-          const candidates = (current.result.memory_candidates ?? []).map(
-            (item) => (item.memory_id === updated.memory_id ? updated : item),
-          );
-          return {
-            ...current,
-            result: {
-              ...current.result,
-              memory_candidates: candidates,
-              memory_candidate:
-                current.result.memory_candidate?.memory_id === updated.memory_id
-                  ? updated
-                  : current.result.memory_candidate,
-            },
-          };
-        });
+      setTask((current) => {
+        if (!current?.result) return current;
+        const candidates = (current.result.memory_candidates ?? []).map(
+          (item) => (item.memory_id === updated.memory_id ? updated : item),
+        );
+        return { ...current, result: { ...current.result, memory_candidates: candidates } };
+      });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "记忆审核操作失败");
     }
@@ -1311,11 +1275,11 @@ function App() {
                   <h2>任务内上下文</h2>
                 </div>
                 <span className="badge neutral">
-                  {result?.context_pack?.items.length ?? 0} /{" "}
-                  {result?.context_pack?.max_items ?? 8} 证据
+                  {result?.evidence_context_pack?.items.length ?? 0} /{" "}
+                  {result?.evidence_context_pack?.max_items ?? 8} 证据
                 </span>
               </div>
-              {result?.context_pack ? (
+              {result?.evidence_context_pack ? (
                 <>
                   <p className="memory-summary">
                     {result.working_memory?.context_summary ??
@@ -1324,17 +1288,17 @@ function App() {
                   <div className="budget">
                     <b
                       style={{
-                        width: `${Math.min(100, (result.context_pack.used_tokens / result.context_pack.budget_tokens) * 100)}%`,
+                        width: `${Math.min(100, (result.evidence_context_pack.used_tokens / result.evidence_context_pack.budget_tokens) * 100)}%`,
                       }}
                     />
                   </div>
                   <small>
-                    {result.context_pack.used_tokens} /{" "}
-                    {result.context_pack.budget_tokens} tokens ·
+                    {result.evidence_context_pack.used_tokens} /{" "}
+                    {result.evidence_context_pack.budget_tokens} tokens ·
                     原文始终可在证据中心回溯
                   </small>
                   <div className="memory-evidence">
-                    {result.context_pack.items.map((item) => (
+                    {result.evidence_context_pack.items.map((item) => (
                       <div key={item.evidence_id}>
                         <code>{item.evidence_id}</code>
                         <span>{item.summary}</span>
@@ -1395,75 +1359,6 @@ function App() {
                 />
               )}
             </div>
-            {false && <div className="card memory-candidate">
-              <div className="section-heading">
-                <div>
-                  <p className="eyebrow">REVIEW-GATED MEMORY</p>
-                  <h2>候选长期记忆</h2>
-                </div>
-                <span
-                  className={`badge ${result?.memory_candidate ? "warning" : "neutral"}`}
-                >
-                  {result?.memory_candidate?.status ?? "无候选"}
-                </span>
-              </div>
-              {result?.memory_candidate ? (
-                <>
-                  <MemoryList items={[result!.memory_candidate!]} />
-                  <label>
-                    替换内容
-                    <input
-                      value={replacementText}
-                      onChange={(event) =>
-                        setReplacementText(event.target.value)
-                      }
-                      placeholder="输入修订后的业务规则或复盘结论"
-                    />
-                  </label>
-                  <div className="review-actions">
-                    <button
-                      className="primary-button"
-                      onClick={() =>
-                        memoryAction(result!.memory_candidate!, "approve")
-                      }
-                    >
-                      批准沉淀
-                    </button>
-                    <button
-                      className="secondary-button"
-                      onClick={() =>
-                        memoryAction(result!.memory_candidate!, "supersede")
-                      }
-                    >
-                      替换候选
-                    </button>
-                    <button
-                      className="danger-button"
-                      onClick={() =>
-                        memoryAction(result!.memory_candidate!, "expire")
-                      }
-                    >
-                      驳回并过期
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  {result?.memory_candidate_extraction?.status ===
-                  "rejected" ? (
-                    <small>
-                      未生成候选：
-                      {result!.memory_candidate_extraction!.reasons.join("、")}
-                      。临时事实、日志和无证据事件不会沉淀。
-                    </small>
-                  ) : null}
-                  <Empty
-                    icon="✓"
-                    text="只有审核完成且具备 Evidence ID、合法 scope 与可复用风险模式的结论才会成为候选长期记忆。"
-                  />
-                </>
-              )}
-            </div>}
           </div>
         </section>
         <section className={`workspace ${view === "review" ? "show" : ""}`}>
@@ -1593,13 +1488,13 @@ function App() {
                     </button>
                     <button
                       className="secondary-button"
-                      onClick={() => review("modify-constraints")}
+                      onClick={() => review("modify_constraints")}
                     >
                       调整约束
                     </button>
                     <button
                       className="secondary-button"
-                      onClick={() => review("need-more-evidence")}
+                      onClick={() => review("need_more_evidence")}
                     >
                       补充证据
                     </button>

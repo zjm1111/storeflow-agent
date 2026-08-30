@@ -37,7 +37,7 @@ flowchart TD
   Observation -->|finish| Review[Durable HITL]
 ```
 
-Runtime policy: tool whitelist、schema validation、`max_loop=6`、`max_search=2`、`max_model_decisions=4`、action idempotency 和 LangGraph checkpoint。
+Runtime policy: tool whitelist、schema validation、`max_loop=6`、`max_search=2`、`max_model_decisions=4`、action idempotency 和 LangGraph native checkpoint。MySQL TaskRepository 保存可查询的业务状态与 `state_version` 乐观锁；Celery 只负责异步调度，Redis Streams/SSE 只负责事件推送。
 
 ## 已实现
 
@@ -48,7 +48,7 @@ Runtime policy: tool whitelist、schema validation、`max_loop=6`、`max_search=
 - 内置且明确标注的模拟运营数据：确定性计算需求偏离、促销 uplift、库存覆盖天数和提前期偏离；调查假设始终以结构化状态展示，不展示私有推理链。
 - LangGraph interrupt + MySQL checkpoint 的持久化 HITL；Celery + Redis Streams 的异步任务和可续传 SSE。
 - JWT/RBAC、SSRF 防护、JSON 日志、Prometheus 指标、Docker Compose。
-- 冻结模拟评测：48 个问题、96 条金标 Evidence、12 条同义问法、48 条无关干扰与 24 条跨维度/冲突资料（共 168 文档）；以本地 BM25、哈希向量和 RRF+本地 rerank 的离线指标对比，详见 [评测集说明](docs/evaluation-dataset.md)。
+- 冻结模拟评测：48 个问题、96 条金标 Evidence、12 条同义问法、48 条无关干扰与 24 条跨维度/冲突资料（共 168 文档）。无真实 embedding 时演示默认走 BM25 + 本地 explainable rerank；配置 embedding 后才启用 BM25 + vector + RRF，详见 [评测集说明](docs/evaluation-dataset.md)。
 
 ## 快速启动
 

@@ -39,4 +39,4 @@
 | HITL Resume Success | 100.00% |
 | Crash Recovery Success | 100.00% |
 
-Citation Validity 未写成满分：一个预算耗尽的冻结场景只含确定性运营异常，未生成文本 Evidence ID；该指标因此为 23/24。所有指标均为固定模拟数据、无远程模型的离线工程行为，不代表企业生产收益、线上模型效果或真实业务准确率。逐 case 的预期动作、focus、预算和断言在 `sample_data/agent_trajectory_cases.json`，运行接口/函数会返回实际轨迹。
+Citation Validity 未写成满分：一个预算耗尽的冻结场景只含确定性运营异常，未生成文本 Evidence ID；该指标因此为 23/24。24-case 指标是 deterministic runtime regression，验证固定 fallback Manager 的工具轨迹、focus、决策守卫、人审交接与恢复，不是远程 LLM 的智能水平或“模型准确率”。所有指标均为固定模拟数据、无远程模型的离线工程行为，不代表企业生产收益、线上模型效果或真实业务准确率。逐 case 的预期动作、focus、预算和断言在 `sample_data/agent_trajectory_cases.json`，运行接口/函数会返回实际轨迹。

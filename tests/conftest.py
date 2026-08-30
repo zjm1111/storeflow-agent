@@ -12,14 +12,12 @@ os.environ.update({
     "REDIS_URL": "redis://localhost:6399/0",
     "QDRANT_URL": "http://127.0.0.1:1",
     "CELERY_BROKER_URL": "memory://",
-    "CELERY_RESULT_BACKEND": "cache+memory://",
     "BAILIAN_API_KEY": "",
     "BAILIAN_BASE_URL": "",
     "BAILIAN_MODEL": "qwen3.7-plus",
     "TAVILY_API_KEY": "",
     "RERANK_PROVIDER": "local",
     "JWT_SECRET": "",
-    "API_KEY": "",
 })
 
 import pytest

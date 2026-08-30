@@ -1,17 +1,16 @@
 from app.agent.nodes.workflow import agent_decide_next_action, agent_execute_tool, agent_mark_action_running, agent_recover_action, extract_events, generate_report, retrieve_sources
-from app.agent.graph import _resume_route
 from app.agent.state import initial_state
 from app.services.context import build_controller_context, build_report_context, build_risk_context
 from app.services.decision import make_decision
 from app.services.retrieval import HybridRetriever, rrf_fuse_lanes
 
 
-def test_rrf_keeps_both_retrieval_channels_visible():
+def test_keyless_retrieval_uses_bm25_fallback():
     ranked = HybridRetriever.__new__(HybridRetriever)._rank(
         "store promotion rain", [{"source_id": "a", "title": "A", "url": "https://example.com/a", "content": "store promotion rain"}, {"source_id": "b", "title": "B", "url": "https://example.com/b", "content": "unrelated"}], {"a": 0.2, "b": 0.9}
     )
-    assert all("rrf_score" in item for item in ranked)
-    assert ranked[0]["rrf_score"] > 0
+    assert all(item["retrieval_mode"] == "bm25_fallback" for item in ranked)
+    assert all(item["rrf_score"] is None for item in ranked)
 
 
 def test_agent_only_selects_read_only_whitelisted_tools(monkeypatch):
@@ -50,23 +49,6 @@ def test_interrupted_action_becomes_unknown_then_retries_with_same_action_id():
     assert retried["active_action"]["status"] == "running"
     assert retried["active_action"]["action_id"] == action_id
     assert retried["active_action"]["attempts"] == 2
-
-
-def test_resume_route_uses_action_phase_not_only_checkpoint_node():
-    state = initial_state("resume-agent", "暴雨期间门店饮料促销如何订货？")
-    # This is a one-release compatibility branch. New tasks resume through
-    # LangGraph's native pending checkpoint and bypass START entirely.
-    state["graph_execution"] = {"legacy_resume": True}
-    state.update(agent_decide_next_action(state))
-    assert _resume_route(state) == "agent_mark_action_running"
-    state.update(agent_mark_action_running(state))
-    assert _resume_route(state) == "agent_recover_action"
-    state.update(agent_recover_action(state))
-    assert _resume_route(state) == "agent_recover_action"
-    state["active_action"] = None
-    state["next_action"] = None
-    state["checkpoint"] = {"node": "agent_execute_tool", "version": 9}
-    assert _resume_route(state) == "agent_decide_next_action"
 
 
 def test_failed_tool_action_is_durable_and_does_not_remain_active(monkeypatch):
@@ -193,7 +175,8 @@ def test_seeded_current_source_enters_source_rrf_and_rerank(monkeypatch):
             return HybridRetriever._rerank(self, query, sources, ranked, errors)
 
     class Memory:
-        def list_for_task(self, _workspace, _scope): return [{"memory_id": "m1", "content": "仅作历史先验"}]
+        def retrieve_approved_priors(self, _workspace, _scope):
+            return {"items": [{"memory_id": "m1", "content": "仅作历史先验"}], "retrieval": {"strategy": "test"}}
 
     monkeypatch.setattr("app.agent.nodes.workflow.HybridRetriever", Retriever)
     monkeypatch.setattr("app.agent.nodes.workflow.MemoryService", Memory)
@@ -214,8 +197,8 @@ def test_retrieval_fans_out_independent_lanes_then_records_fan_in(monkeypatch):
             return ([{"source_id": "public-1", "title": "天气配送", "url": "https://example.com/out", "content": "暴雨 导致 中央仓 配送 延迟", "retrieved_at": "2026-08-22T00:00:00Z"}], [{"source_id": "public-1", "rrf_score": 0.03, "rerank_score": 0.7}], [])
 
     class Memory:
-        def list_for_task(self, _workspace, _scope):
-            return [{"memory_id": "m1", "content": "同区域暴雨时应复核配送时效"}]
+        def retrieve_approved_priors(self, _workspace, _scope):
+            return {"items": [{"memory_id": "m1", "content": "同区域暴雨时应复核配送时效"}], "retrieval": {"strategy": "test"}}
 
     monkeypatch.setattr("app.agent.nodes.workflow.HybridRetriever", Retriever)
     monkeypatch.setattr("app.agent.nodes.workflow.MemoryService", Memory)

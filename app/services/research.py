@@ -3,13 +3,12 @@ from datetime import datetime, timezone
 
 from app.agent.graph import build_research_graph
 from app.agent.state import initial_state
-from app.repositories import StateConflictError, TaskRepository
+from app.repositories import ReviewRepository, StateConflictError, TaskRepository
 from app.services.events import TaskEventBroker
 from app.services.llm import BailianClient, ModelCallError
 from app.services.memory import MemoryService
 from app.services.memory_candidates import MemoryCandidateExtractor
 from app.services.context import context_budget_policy
-from app.repositories.task_snapshot_history import TaskSnapshotHistoryRepository
 from app.agent.review_graph import build_review_graph
 from langgraph.types import Command
 
@@ -17,26 +16,24 @@ from langgraph.types import Command
 class ResearchService:
     def __init__(self, repository: TaskRepository | None = None, events: TaskEventBroker | None = None):
         self.repository = repository or TaskRepository()
+        self.reviews = ReviewRepository()
         self.graph = build_research_graph()
         self.events = events or TaskEventBroker()
-        self.snapshot_history = TaskSnapshotHistoryRepository()
         self.review_graph = build_review_graph()
 
-    def _new_graph_execution(self, task_id: str, *, legacy_resume: bool = False) -> dict:
+    def _new_graph_execution(self, task_id: str) -> dict:
         """Business projection for a distinct native graph run.
 
         ``run_id`` distinguishes a review-driven replan from an earlier
         terminal run even though both intentionally share ``thread_id=task_id``.
         It does not determine graph recovery; LangGraph's pending checkpoint
-        does. ``legacy_resume`` is a one-release bridge for snapshots written
-        before the main graph had a native checkpointer.
+        does. Graph recovery always uses the native checkpointer.
         """
         return {
             "thread_id": task_id,
             "run_id": f"run-{uuid4().hex}",
             "checkpointer_mode": getattr(self.graph, "supplymind_checkpointer_mode", "unknown"),
             "degradation": getattr(self.graph, "supplymind_checkpointer_degradation", None),
-            "legacy_resume": legacy_resume,
         }
 
     @staticmethod
@@ -65,7 +62,6 @@ class ResearchService:
         state["status"] = "queued"
         state["graph_execution"] = self._new_graph_execution(task_id)
         self.repository.save(task_id, state)
-        self.snapshot_history.record_snapshot(state)
         self.events.publish(task_id, "task", {"task_id": task_id, "status": "queued", "state_version": state.get("state_version")})
         return state
 
@@ -77,12 +73,7 @@ class ResearchService:
         trace_count = 0
         execution = state.get("graph_execution") or {}
         if not execution.get("run_id"):
-            # A persisted task from before the native-checkpoint migration.
-            # It may still have an action in flight, for which the old action
-            # snapshot provides one safe compatibility recovery only.
-            active = state.get("active_action") or {}
-            legacy_resume = active.get("status") in {"planned", "running", "unknown"}
-            execution = self._new_graph_execution(task_id, legacy_resume=legacy_resume)
+            execution = self._new_graph_execution(task_id)
             state["graph_execution"] = execution
         graph_config = self._graph_config(task_id)
         native_snapshot = self._matching_native_snapshot(task_id, execution)
@@ -108,7 +99,6 @@ class ResearchService:
             }
             try:
                 self.repository.save(task_id, terminal)
-                self.snapshot_history.record_snapshot(terminal)
             except StateConflictError:
                 return
             state = terminal
@@ -124,7 +114,6 @@ class ResearchService:
                 current["state_version"] = expected_state_version
                 self.repository.save(task_id, current)
                 expected_state_version = current["state_version"]
-                self.snapshot_history.record_snapshot(current)
                 trace = current.get("trace", [])
                 for entry in trace[trace_count:]:
                     self.events.publish(task_id, "trace", entry)
@@ -149,7 +138,6 @@ class ResearchService:
                 latest["graph_execution"] = execution_projection
                 try:
                     self.repository.save(task_id, latest)
-                    self.snapshot_history.record_snapshot(latest)
                 except StateConflictError:
                     latest = self.repository.get(task_id, workspace_id) or latest
         # The bounded manager explicitly asks for HITL after a decision draft.
@@ -170,7 +158,6 @@ class ResearchService:
             self.repository.save(task_id, state)
         except StateConflictError:
             return None
-        self.snapshot_history.record_snapshot(state)
         return state
 
     def get(self, task_id: str, workspace_id: str = "demo") -> dict | None:
@@ -201,7 +188,7 @@ class ResearchService:
         return {
             "task_id": task["task_id"],
             "risk_events": task.get("events", []),
-            "evidence_pack": task.get("evidence_context_pack") or task.get("context_pack", {}),
+            "evidence_pack": task.get("evidence_context_pack", {}),
             "retrieval_freshness": {"source_count": len(sources), "newest_age_days": min(ages) if ages else None, "oldest_age_days": max(ages) if ages else None},
             "memory_hits": task.get("recalled_memories", []),
             "strategies": strategies,
@@ -227,7 +214,6 @@ class ResearchService:
         task["human_review"] = {"status": "awaiting_review", "comment": None, "constraints": None, "interrupt_thread_id": f"review:{task_id}", "payload": payload}
         self._audit(task, "decision_ready", None, None, "awaiting_review")
         self.repository.save(task_id, task)
-        self.snapshot_history.record_snapshot(task)
         self.events.publish(task_id, "task", {"task_id": task_id, "status": "awaiting_review", "state_version": task.get("state_version")})
         return task
 
@@ -279,8 +265,6 @@ class ResearchService:
                 )
                 for proposed in proposed_items
             ]
-            # Compatibility for clients written before atomic candidate support.
-            task["memory_candidate"] = task["memory_candidates"][0] if task["memory_candidates"] else None
             self._audit(task, action, comment, None, "approved")
         elif action == "modify_constraints":
             decision = task.get("decision") or {}
@@ -316,9 +300,6 @@ class ResearchService:
             task["hybrid_results"] = []
             empty_evidence_pack = {"kind": "current_evidence", "budget_tokens": context_budget_policy()["evidence_budget"], "used_tokens": 0, "items": []}
             task["evidence_context_pack"] = empty_evidence_pack
-            # Deprecated compatibility projection for clients before the
-            # Context Management naming convergence.
-            task["context_pack"] = empty_evidence_pack
             requested = [value for value in (evidence_dimensions or []) if value in {"inventory", "delivery", "demand", "cost"}]
             if requested:
                 task["missing_dimensions"] = requested
@@ -340,7 +321,6 @@ class ResearchService:
             # authenticated subject supplied by the API dependency.
             task["audit_trail"][-1]["reviewer"] = reviewer
         self.repository.save(task_id, task)
-        self.snapshot_history.record_snapshot(task)
-        self.snapshot_history.record_review(task, action, reviewer, {"comment": comment, "constraints": constraints, "action_audit": task.get("checkpoint")})
+        self.reviews.record(task, action, reviewer, {"comment": comment, "constraints": constraints, "action_audit": task.get("checkpoint")})
         self.events.publish(task_id, "task", {"task_id": task_id, "status": task["status"], "state_version": task.get("state_version")})
         return task

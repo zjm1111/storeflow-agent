@@ -23,7 +23,6 @@ class WorkspaceRecord(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
-
 class DocumentRecord(Base):
     __tablename__ = "documents"
     document_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -139,17 +138,4 @@ class EvaluationRunRecord(Base):
     run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     metrics: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-
-
-class CheckpointRecord(Base):
-    # Legacy physical table name retained for already-created demo databases.
-    # It stores TaskSnapshotHistory audit rows, not LangGraph checkpoints.
-    __tablename__ = "checkpoints"
-    checkpoint_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    workspace_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    task_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
-    version: Mapped[int] = mapped_column(Integer, nullable=False)
-    node: Mapped[str] = mapped_column(String(80), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

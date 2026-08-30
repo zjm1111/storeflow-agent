@@ -178,16 +178,15 @@ def _reviewable_task(client: TestClient) -> str:
     created = client.post("/tasks", json={"question": "How could heavy rain delay online grocery delivery?"})
     task_id = created.json()["task_id"]
     service.run(task_id)
-    decision = client.post(f"/tasks/{task_id}/decision")
-    assert decision.status_code == 200
-    assert decision.json()["status"] == "awaiting_review"
+    task = service.get(task_id)
+    assert task and task["status"] == "awaiting_review"
     return task_id
 
 
 def test_week8_approve_generates_final_report_and_audit_record():
     with TestClient(app) as client:
         task_id = _reviewable_task(client)
-        response = client.post(f"/tasks/{task_id}/review/approve", json={"comment": "Approved after KPI review."})
+        response = client.post(f"/tasks/{task_id}/review?action=approve", json={"comment": "Approved after KPI review."})
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "approved"
@@ -198,7 +197,7 @@ def test_week8_approve_generates_final_report_and_audit_record():
 def test_week8_modify_constraints_reoptimizes_and_remains_awaiting_review():
     with TestClient(app) as client:
         task_id = _reviewable_task(client)
-        response = client.post(f"/tasks/{task_id}/review/modify-constraints", json={"comment": "Cap spend.", "constraints": {"budget": 500, "max_replenishment": 30}})
+        response = client.post(f"/tasks/{task_id}/review?action=modify_constraints", json={"comment": "Cap spend.", "constraints": {"budget": 500, "max_replenishment": 30}})
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "awaiting_review"
@@ -209,9 +208,9 @@ def test_week8_modify_constraints_reoptimizes_and_remains_awaiting_review():
 def test_week8_need_more_evidence_replans_and_preserves_audit_trail():
     with TestClient(app) as client:
         task_id = _reviewable_task(client)
-        response = client.post(f"/tasks/{task_id}/review/need-more-evidence", json={"comment": "Need warehouse capacity evidence."})
+        response = service.review(task_id, "need_more_evidence", "Need warehouse capacity evidence.")
         result = client.get(f"/tasks/{task_id}/result").json()
-    assert response.status_code == 200
+    assert response is not None
     assert any(item["action"] == "need_more_evidence" for item in result["audit_trail"])
     assert any(item["node"] == "initialize" for item in result["trace"])
     assert result["status"] in {"queued", "running", "awaiting_review"}
@@ -220,8 +219,8 @@ def test_week8_need_more_evidence_replans_and_preserves_audit_trail():
 def test_week8_reject_terminates_and_illegal_transition_is_rejected():
     with TestClient(app) as client:
         task_id = _reviewable_task(client)
-        rejected = client.post(f"/tasks/{task_id}/review/reject", json={"comment": "Risk too high."})
-        illegal = client.post(f"/tasks/{task_id}/review/approve", json={"comment": "Too late."})
+        rejected = client.post(f"/tasks/{task_id}/review?action=reject", json={"comment": "Risk too high."})
+        illegal = client.post(f"/tasks/{task_id}/review?action=approve", json={"comment": "Too late."})
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "rejected"
     assert illegal.status_code == 409

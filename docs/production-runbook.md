@@ -7,7 +7,7 @@
 - `ENVIRONMENT=production`
 - 强随机 `MYSQL_PASSWORD`、`MYSQL_ROOT_PASSWORD`
 - 公开站点的精确 `FRONTEND_ORIGINS` 与 `TRUSTED_HOSTS`
-- 高熵 `API_KEY`；调用受保护 API 时传递 `X-API-Key`
+- `JWT_SECRET` 与真实身份源；所有业务 API 通过 JWT/RBAC 授权
 - `RATE_LIMIT_PER_MINUTE`（默认 120；设为 `0` 可在受控测试环境禁用）
 
 不要提交 `.env`、API Key 或数据库密码。将密钥放在宿主机的秘密管理系统、Docker secrets 或云平台的密钥服务中。

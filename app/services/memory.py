@@ -169,10 +169,6 @@ class MemoryService:
             },
         }
 
-    def list_for_task(self, workspace_id: str, scope: dict, limit: int = 5) -> list[dict]:
-        """Compatibility list API; new callers should retain retrieval metadata."""
-        return self.retrieve_approved_priors(workspace_id, scope, limit)["items"]
-
     def get(self, memory_id: str, workspace_id: str = "demo") -> dict | None:
         with SessionLocal() as session:
             record = session.get(MemoryItemRecord, memory_id)
@@ -266,7 +262,7 @@ class MemoryService:
     @staticmethod
     def _dump(record: MemoryItemRecord) -> dict:
         return {"memory_id": record.memory_id, "workspace_id": record.workspace_id, "status": record.status,
-                "kind": record.kind, "summary": record.summary or MemoryService._legacy_summary(record.memory_id),
+                "kind": record.kind, "summary": record.summary or MemoryService._summary(record.content),
                 "content": record.content, "evidence_ids": record.evidence_ids or [],
                 "scope": record.scope or {}, "confidence": record.confidence, "reviewed_by": record.reviewed_by,
                 "review_action": record.review_action, "review_comment": record.review_comment,
@@ -346,10 +342,6 @@ class MemoryService:
         return any(name == other_name and value != other_value for name, value in left_claims for other_name, other_value in right_claims)
 
     @staticmethod
-    def _legacy_summary(memory_id: str) -> str:
-        return f"已批准历史业务记忆（{memory_id}；待下次修订生成摘要）"
-
-    @staticmethod
     def _token_estimate(content: str) -> int:
         """Compatibility method delegating to the shared context estimator."""
         return estimate_tokens(content)
@@ -375,7 +367,10 @@ class MemoryService:
         """Serialize a catalog row without touching its long-form content."""
         return {
             "memory_id": item["memory_id"], "workspace_id": item["workspace_id"], "status": item["status"],
-            "kind": item["kind"], "summary": item["summary"] or cls._legacy_summary(item["memory_id"]),
+            # Catalog queries intentionally omit long-form content. New
+            # candidates always persist a summary; an older row without one
+            # remains recallable and gets its content only after selection.
+            "kind": item["kind"], "summary": item["summary"] or "未提供摘要",
             "evidence_ids": item["evidence_ids"] or [], "scope": item["scope"] or {},
             "confidence": float(item["confidence"]), "reviewed_by": item["reviewed_by"],
             "review_action": item["review_action"], "review_comment": item["review_comment"],

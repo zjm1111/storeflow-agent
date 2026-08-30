@@ -4,7 +4,7 @@ StoreFlow 是单 Manager、受限 ReAct Agent。LLM 不直接检索、计算订�
 
 ## Context Management 命名边界
 
-`evidence_context_pack` 是当前事实证据的唯一压缩上下文包：它只包含带 Evidence ID 的、可回溯的当前来源摘录，不包含 Historical Prior、完整 `ResearchState` 或模型输出。`context_pack` 在一个兼容版本内保留为同一对象的旧 API 别名。所有预模型预算统一使用保守的 `estimate_tokens()`：对中英文、数字与标点分别估算，目的是 hard budget 安全余量而非供应商账单统计；真实模型 usage 仍由 provider 返回值记录。
+`evidence_context_pack` 是当前事实证据的唯一压缩上下文包：它只包含带 Evidence ID 的、可回溯的当前来源摘录，不包含 Historical Prior、完整 `ResearchState` 或模型输出。所有预模型预算统一使用保守的 `estimate_tokens()`：对中英文、数字与标点分别估算，目的是 hard budget 安全余量而非供应商账单统计；真实模型 usage 仍由 provider 返回值记录。
 
 单次模型请求采用固定预算策略，而不是让 Evidence 吃满窗口：默认总窗口为 14k token，预留 system/instruction 900、working state 1k、Historical Prior 1.6k、输出 1.5k；Evidence Context 最多 8k，配置不一致时会被总预算自动 clamp。风险提取与报告生成的模型输入只接收 `CURRENT_EVIDENCE_CONTEXT`（压缩摘要、Evidence ID、来源 ID 与定位元数据），原始 quote 只留在 State 中做 Evidence-to-source 校验、UI 展示和引用回溯。因此“选择/压缩”只做一次，并真正决定模型能看到的当前事实材料。
 
@@ -78,7 +78,7 @@ Research Graph 与 Review Graph 都通过 LangGraph 原生 MySQL Checkpointer �
 
 TaskRepository 始终是业务真相源，负责 `task_id`、`workspace_id`、幂等创建、前端查询和最新业务投影。`state_version` 是该投影的 MySQL 乐观锁版本；每次写入都以 `WHERE state_version = expected` compare-and-swap，旧 worker 或并发审核写入不会覆盖较新的完整 State，而是收到冲突并重新读取。动作级 `checkpoint.version`、`active_action` 与 `action_id` 继续用于工具幂等、审计与故障排查，而非替代 LangGraph 的执行 checkpoint。
 
-`TaskSnapshotHistoryRepository` 将每个动作阶段的最新业务投影写入遗留物理表 `checkpoints`（为兼容已有演示数据，表名暂不迁移）。它只承担任务快照历史、审核审计和故障排查；`latest_snapshot()` 明确是诊断读取，任何新任务的主图都不得从它路由或恢复。旧的 `CheckpointRepository` 导入名仅保留一个版本兼容别名，新的应用代码全部使用 `record_snapshot()` / `latest_snapshot()`。
+不再维护独立的 TaskSnapshotHistory 或旧 `checkpoints` 表：它们会重复 TaskRepository 投影与 LangGraph checkpoint。`ReviewRecord` 仍单独保存审核审计，任务查询仍从 TaskRepository 读取最新业务状态。
 
 ## 异步测试约定
 

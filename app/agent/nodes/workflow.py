@@ -70,8 +70,8 @@ _AGENT_TOOLS = ("retrieve_evidence", "analyze_operational_data", "assess_investi
 
 
 def _evidence_context_pack(state: ResearchState) -> dict:
-    """Read the explicit pack first; retain one-release legacy compatibility."""
-    return state.get("evidence_context_pack") or state.get("context_pack", {})
+    """Return the current factual context pack, never historical memory."""
+    return state.get("evidence_context_pack") or {}
 
 
 def _record_context(state: ResearchState, projection: dict, *, system_prompt: str, mode: str) -> list[dict]:
@@ -295,7 +295,7 @@ def agent_execute_tool(state: ResearchState) -> dict:
                 parsed = parse_sources({**state, **retrieved})
                 scored = score_evidence({**state, **retrieved, **parsed})
                 update = {**retrieved, **parsed, **scored}
-                observation = f"{len(scored.get('evidence_context_pack', scored.get('context_pack', {})).get('items', []))} evidence selected; parallel lanes={','.join(scored.get('working_memory', {}).get('parallel_retrieval', {}).get('completed_lanes', []))}"
+                observation = f"{len(scored.get('evidence_context_pack', {}).get('items', []))} evidence selected; parallel lanes={','.join(scored.get('working_memory', {}).get('parallel_retrieval', {}).get('completed_lanes', []))}"
             elif tool == "analyze_operational_data":
                 snapshot = OperationalDataAnalyzer().analyze(scope=state.get("scope"))
                 update = {"analysis_snapshot": snapshot}
@@ -324,7 +324,7 @@ def agent_execute_tool(state: ResearchState) -> dict:
                 "agent_actions": _replace_action(state.get("agent_actions", []), failed),
                 "__recovery_message": f"action {action['action_id']} failed: {type(exc).__name__}",
             }
-        pack = update.get("evidence_context_pack") or update.get("context_pack") or _evidence_context_pack(state)
+        pack = update.get("evidence_context_pack") or _evidence_context_pack(state)
         budget = {"remaining_steps": max(0, state.get("max_loop", 6) - len(state.get("agent_actions", [])) - 1), "remaining_external_searches": max(0, state.get("max_search", 2) - update.get("search_count", state.get("search_count", 0))), "remaining_token_budget": max(0, context_budget_policy()["evidence_budget"] - pack.get("used_tokens", 0)), "latency_ms": round((perf_counter() - started) * 1000, 1)}
         evidence_ids = update.get("working_memory", state.get("working_memory", {})).get("selected_evidence_ids", [])
         completed = {**action, "status": "completed", "completed_at": datetime.now(timezone.utc).isoformat(), "observation": observation, "evidence_ids": evidence_ids, "budget": budget}
@@ -399,12 +399,7 @@ def _retrieve_parallel_lanes(state: ResearchState, query: str) -> tuple[list[dic
         return HybridRetriever().retrieve(query)
 
     def memory_lane():
-        service = MemoryService()
-        # Keep test doubles and the legacy list method compatible while the
-        # production path preserves independent retrieval diagnostics.
-        if hasattr(service, "retrieve_approved_priors"):
-            return service.retrieve_approved_priors(workspace_id, scope)
-        return {"items": service.list_for_task(workspace_id, scope), "retrieval": {"strategy": "legacy_list_for_task"}}
+        return MemoryService().retrieve_approved_priors(workspace_id, scope)
 
     lane_errors: list[str] = []
     outcomes: dict[str, object] = {}
@@ -432,6 +427,7 @@ def _retrieve_parallel_lanes(state: ResearchState, query: str) -> tuple[list[dic
     lane_errors.extend(public_errors)
     telemetry = {
         "mode": "source_fan_out_with_memory_prior",
+        "retrieval_strategy": "hybrid_rrf" if getattr(get_settings(), "model_enabled", False) else "bm25_fallback",
         "source_lanes": ["internal_knowledge", "public_risk"],
         "memory_lane": "approved_memory_prior",
         "memory_prior": memory_result.get("retrieval", {}),
@@ -612,8 +608,6 @@ def score_evidence(state: ResearchState) -> dict:
         return {
             "evidence": scored,
             "evidence_context_pack": evidence_context_pack,
-            # Deprecated result field retained for old console/API clients.
-            "context_pack": evidence_context_pack,
             "memory_conflicts": memory_conflicts,
             "working_memory": {
                 **state.get("working_memory", {}),

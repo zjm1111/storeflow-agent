@@ -8,7 +8,6 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
       LANGGRAPH_CHECKPOINT_URL: mysql+pymysql://${MYSQL_USER:-supplymind}:${MYSQL_PASSWORD:-change-me}@mysql:3306/supplymind_langgraph
     restart: unless-stopped
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -48,7 +47,6 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
       LANGGRAPH_CHECKPOINT_URL: mysql+pymysql://${MYSQL_USER:-supplymind}:${MYSQL_PASSWORD:-change-me}@mysql:3306/supplymind_langgraph
     command: celery -A app.worker.celery_app worker --loglevel=INFO
     restart: unless-stopped

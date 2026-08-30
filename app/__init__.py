@@ -1,1 +1,1 @@
-"""StoreFlow application package (legacy internal module namespace retained)."""
+"""StoreFlow application package."""

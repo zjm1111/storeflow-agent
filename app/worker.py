@@ -29,8 +29,8 @@ except ImportError:  # local no-dependency test mode
 else:
     from app.core import get_settings
     settings = get_settings()
-    celery_app = Celery("supplymind", broker=settings.celery_broker_url, backend=settings.celery_result_backend)
-    celery_app.conf.update(task_acks_late=True, task_reject_on_worker_lost=True, task_track_started=True)
+    celery_app = Celery("supplymind", broker=settings.celery_broker_url)
+    celery_app.conf.update(task_acks_late=True, task_reject_on_worker_lost=True, task_track_started=True, task_ignore_result=True)
 
     @celery_app.task(name="supplymind.run_task", bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
     def run_task(self, task_id: str, checkpoint_version: int | None = None, workspace_id: str = "demo", state_version: int | None = None) -> bool:

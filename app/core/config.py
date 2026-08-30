@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     qdrant_url: str = "http://localhost:6333"
     frontend_origins: str = "http://localhost:5173"
-    api_key: str = ""
     trusted_hosts: str = "localhost,127.0.0.1,testserver"
     log_level: str = "INFO"
     rate_limit_per_minute: int = 120
@@ -45,10 +44,7 @@ class Settings(BaseSettings):
     rerank_provider: str = "local"
     rag_candidate_limit: int = 30
     rag_final_limit: int = 8
-    # Context policy is intentionally partitioned before a model call. The
-    # legacy context_token_budget remains as a compatibility ceiling only;
-    # new code uses model/evidence/working/output budgets below.
-    context_token_budget: int = 12000
+    # Context policy is intentionally partitioned before a model call.
     model_context_token_budget: int = 14000
     system_context_token_budget: int = 900
     working_state_context_token_budget: int = 1000
@@ -70,7 +66,6 @@ class Settings(BaseSettings):
     # before any real deployment; this project does not claim production SSO.
     jwt_users_json: str = ""
     celery_broker_url: str = "redis://localhost:6379/1"
-    celery_result_backend: str = "redis://localhost:6379/2"
 
     # Docker Compose injects local configuration as environment variables.
     # The application deliberately does not open a local .env file.

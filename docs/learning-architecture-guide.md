@@ -105,7 +105,7 @@ RiskEvent → Evidence ID → source_id / URI / 原文片段 / offset
 
 ## 3. 上下文管理：为什么不把检索结果全塞给 LLM
 
-模型上下文有限，更多材料也会带来噪音、重复和提示注入风险。StoreFlow 用 `build_context_pack()` 构建证据包：
+模型上下文有限，更多材料也会带来噪音、重复和提示注入风险。StoreFlow 用 `build_evidence_context_pack()` 构建证据包：
 
 1. 先按综合分排序；
 2. 优先选不同来源、不同事件的证据，保持多样性；
@@ -128,7 +128,7 @@ RiskEvent → Evidence ID → source_id / URI / 原文片段 / offset
 
 ### 4.1 工作记忆
 
-它在 `ResearchState` / MySQL 任务快照中，例如 `working_memory`、`agent_actions`、`context_pack`。它不是 Redis 缓存，也不是向量库。
+它在 `ResearchState` / MySQL 任务快照中，例如 `working_memory`、`agent_actions`、`evidence_context_pack`。它不是 Redis 缓存，也不是向量库。
 
 面试表述：
 
