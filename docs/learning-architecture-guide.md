@@ -61,9 +61,9 @@ RAG 不是“上传 PDF 后把全文发给模型”，而是：
 | 模式 | 向量 | 目的 |
 | --- | --- | --- |
 | 百炼 Key 已配置 | 百炼 embedding | 更接近真实语义检索演示 |
-| 无 Key / 调用失败 | 64 维哈希向量 | 本地确定性 Demo 与可用降级，不是生产语义向量 |
+| 无 Key | 不生成向量 | 使用 BM25 + 本地可解释重排的确定性演示路径 |
 
-因此面试不能说“无 Key 时仍然使用高质量 embedding 模型”；应该说“无 Key 用确定性哈希向量保证演示闭环，配置百炼后才启用远程 embedding”。
+运行时只有配置真实 embedding 后才启用向量检索与 RRF；无 Key 时明确标记为 `bm25_fallback`。哈希向量仅保留为离线评测基线，不参与默认运行时检索。
 
 相关源码：[app/services/retrieval.py](../app/services/retrieval.py)、[app/services/context.py](../app/services/context.py)。
 
@@ -130,9 +130,7 @@ RiskEvent → Evidence ID → source_id / URI / 原文片段 / offset
 
 它在 `ResearchState` / MySQL 任务快照中，例如 `working_memory`、`agent_actions`、`evidence_context_pack`。它不是 Redis 缓存，也不是向量库。
 
-面试表述：
-
-> 工作记忆是 LangGraph 状态中的任务级白板，保存“已经做了什么”和“还缺什么”，用于下一轮 ReAct 判断。
+工作记忆是 LangGraph 状态中的任务级白板，保存“已经做了什么”和“还缺什么”，用于下一轮 ReAct 判断。
 
 ### 4.2 情景记忆
 
@@ -238,6 +236,6 @@ POST /tasks → MySQL 快照 → Celery worker → LangGraph stream
 6. 读 `decision.py`，理解为什么数值决策不交给 LLM；
 7. 最后读 `research.py`、`events.py`、`review_graph.py`，理解异步、HITL 和恢复。
 
-## 9. 面试时的一分钟版本
+## 9. 系统概览
 
-> StoreFlow 是一个受限的零售补货决策 Agent。LangGraph 的单 Manager 根据当前 Observation 选择取证、评估缺口、决策或提交审核；每次取证将内部 PDF 的 BM25/向量、可选 Tavily 和审批长期记忆并行召回，再由 RRF、重排、Evidence ID 和上下文预算器形成可追溯证据包。LLM 不直接计算补货量，固定种子 Monte Carlo 与 OR-Tools 对三种风险偏好方案做可复现比较。决策草案自动进入持久化 HITL，只有审核批准且绑定 Evidence ID 的经验才能跨任务复用。当前边界是模拟资料、单门店单 SKU 单周期，不连接 ERP 或自动下单。
+> StoreFlow 是一个受限的供应链异常调查与补货决策 Agent。LangGraph 的单 Manager 根据当前 Observation 选择取证、评估缺口、决策或提交审核；每次取证将内部 PDF 的 BM25/向量、可选 Tavily 和审批长期记忆并行召回，再由 RRF、重排、Evidence ID 和上下文预算器形成可追溯证据包。LLM 不直接计算补货量，固定种子 Monte Carlo 与 OR-Tools 对三种风险偏好方案做可复现比较。决策草案自动进入持久化 HITL，只有审核批准且绑定 Evidence ID 的经验才能跨任务复用。当前边界是模拟资料、单门店单 SKU 单周期，不连接 ERP 或自动下单。
