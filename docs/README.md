@@ -10,4 +10,4 @@
 - [14 天 AI 应用工程师学习工作簿](ai-app-interview-study-workbook.md)
 - [面试问答卡（15 题）](interview-flashcards.md)
 
-StoreFlow 面向连锁零售区域采购负责人的补货风险决策 Agent。所有面向使用、演示与求职的材料均以本索引链接的当前文档为准。
+StoreFlow 面向连锁零售区域采购负责人的供应链异常调查与补货决策 Agent。所有面向使用、演示与求职的材料均以本索引链接的当前文档为准。

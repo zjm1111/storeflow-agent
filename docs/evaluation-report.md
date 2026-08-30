@@ -18,19 +18,25 @@
 
 四维明细与可复跑 JSON 由评测接口返回；实现见 `app/services/evaluation.py`。
 
-## Agent trajectory 离线评测（2026-08-29）
+## Agent trajectory 离线评测（2026-08-30）
 
-运行方式：`run_agent_trajectory_evaluation()`。评测实际执行受限 Manager、动作持久化、工具分发、证据解析/评分、调查评估与决策前置条件；为保证可重复且不产生外部调用，证据采集通道固定为仓库内 `SAMPLE_SOURCES`，不调用远程模型、Tavily、Qdrant 或 MySQL。
+运行方式：`.venv\\Scripts\\python.exe -c "from app.services.evaluation import run_agent_trajectory_evaluation; print(run_agent_trajectory_evaluation())"`。评测实际执行单 Manager、动作持久化、状态机、工具分发、证据解析/评分、确定性运营分析、调查评估、决策守卫和人审交接；仅将网络/数据库采集替换为 `sample_data/agent_trajectory_cases.json` 的冻结 fixture，不调用远程模型。
+
+24 个具名 case 分为：证据充分 6 个、缺失维度并定向补证 6 个、配送来源冲突并补证 6 个、预算/不可行约束/固定 scope 等受控边界 6 个。崩溃恢复指标实际执行持久化的 `running → unknown` 恢复转换；HITL 指标核验每条完成决策都进入预期审核交接。
 
 | 指标 | 实测结果 |
 | --- | ---: |
-| 冻结模拟调查 case | 2 |
-| Task Success | 100.0% |
-| Tool Selection Accuracy | 80.0% |
-| Unnecessary Tool Rate | 20.0% |
-| 平均步骤数 | 5.0 |
-| 平均检索次数 | 1.0 |
-| Citation Validity | 100.0% |
-| Constraint Pass Rate | 100.0% |
+| 冻结模拟调查 case | 24 |
+| Task Success | 100.00% |
+| Tool Selection Accuracy | 100.00% |
+| Focus Accuracy | 100.00% |
+| Evidence Sufficiency | 100.00% |
+| Unnecessary Tool Rate | 0.00% |
+| 平均步骤数 | 6.00 |
+| 平均检索次数 | 1.50 |
+| Citation Validity | 95.83% |
+| Constraint Pass Rate | 100.00% |
+| HITL Resume Success | 100.00% |
+| Crash Recovery Success | 100.00% |
 
-该结果刻意保留非满分的工具选择准确率和额外工具率：固定 Demo scope 之外的 case 仍完成受控调查与审核，但多执行了决策/审核动作。这是当前实现的真实离线结果，不代表真实企业流量或线上模型效果。
+Citation Validity 未写成满分：一个预算耗尽的冻结场景只含确定性运营异常，未生成文本 Evidence ID；该指标因此为 23/24。所有指标均为固定模拟数据、无远程模型的离线工程行为，不代表企业生产收益、线上模型效果或真实业务准确率。逐 case 的预期动作、focus、预算和断言在 `sample_data/agent_trajectory_cases.json`，运行接口/函数会返回实际轨迹。

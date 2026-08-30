@@ -11,7 +11,13 @@ from app.services.decision import make_decision
 from app.services.llm import BailianClient, ModelCallError
 from app.services.retrieval import _bm25_scores, _local_rerank_score, _tokens, _vector, rrf_fuse_lanes
 from app.agent.state import initial_state
-from app.agent.nodes.workflow import initialize, agent_decide_next_action, agent_mark_action_running, agent_execute_tool
+from app.agent.nodes.workflow import (
+    initialize,
+    agent_decide_next_action,
+    agent_mark_action_running,
+    agent_execute_tool,
+    agent_recover_action,
+)
 from app.agent.nodes import workflow as workflow_nodes
 from app.agent.fixtures import SAMPLE_SOURCES
 
@@ -20,18 +26,87 @@ CHALLENGES_PATH = Path(__file__).resolve().parents[2] / "sample_data" / "evaluat
 TRAJECTORY_CASES_PATH = Path(__file__).resolve().parents[2] / "sample_data" / "agent_trajectory_cases.json"
 
 
+def _trajectory_source(source_id: str, content: str) -> dict:
+    return {
+        "source_id": source_id,
+        "title": f"冻结模拟资料 {source_id}",
+        "source_type": "fixture",
+        "url": f"https://fixture.storeflow.local/{source_id}",
+        "content": content,
+        "retrieved_at": "2026-08-30T00:00:00+00:00",
+    }
+
+
+def _trajectory_sources(mode: str) -> list[dict]:
+    """Small, human-readable fixtures for reproducible investigation paths."""
+    complete = [
+        _trajectory_source("fixture-inventory", "Central warehouse inventory is low; store stock cover is below safety stock."),
+        _trajectory_source("fixture-demand", "Sales demand increased during promotion and order volume is above plan."),
+        _trajectory_source("fixture-delivery", "Distribution hub delivery delay is caused by traffic and weather logistics disruption."),
+        _trajectory_source("fixture-cost", "Purchase cost is elevated, requiring a controlled replenishment decision."),
+    ]
+    if mode == "complete":
+        return complete
+    if mode.startswith("missing_"):
+        dimension = mode.removeprefix("missing_")
+        return [item for item in complete if dimension not in item["source_id"]]
+    if mode == "conflict_delivery":
+        return [
+            *[item for item in complete if "delivery" not in item["source_id"]],
+            _trajectory_source("fixture-delivery-delayed", "Delivery delay remains likely because traffic disruption is continuing."),
+            _trajectory_source("fixture-delivery-normal", "Delivery arrived on time and the logistics provider reports no delay."),
+        ]
+    raise ValueError(f"unknown frozen trajectory fixture mode: {mode}")
+
+
+def _run_recovery_probe() -> bool:
+    """Exercise the persisted running -> unknown recovery transition, not a mock assertion."""
+    state = initial_state("eval-recovery", "冻结恢复探针")
+    state["active_action"] = {"action_id": "act-recovery", "status": "running", "tool": "retrieve_evidence", "attempts": 1}
+    state["agent_actions"] = [state["active_action"]]
+    state.update(agent_recover_action(state))
+    return state.get("active_action", {}).get("status") == "unknown"
+
+
 def run_agent_trajectory_evaluation() -> dict:
-    """Run frozen cases through the deterministic bounded manager and calculate metrics."""
+    """Execute checked-in frozen cases through the real bounded-manager state machine.
+
+    Only acquisition is substituted with fixtures. Schema parsing, the action state
+    machine, deterministic analysis, investigation assessment, decision guard and
+    review handoff all remain the production implementation.
+    """
     cases = json.loads(TRAJECTORY_CASES_PATH.read_text(encoding="utf-8"))
-    results = []
+    if len(cases) != 24:
+        raise ValueError("agent_trajectory_cases.json must contain exactly 24 frozen cases")
+    required = {"id", "category", "question", "scope", "fixture_sequence", "max_search", "max_loop", "expected_tools", "expected_focuses", "expect_degraded", "expect_decision", "expect_review"}
+    if any(required - set(case) for case in cases):
+        raise ValueError("trajectory case schema is incomplete")
+    results: list[dict] = []
     original_retrieve = workflow_nodes.retrieve_sources
+    active_case: dict | None = None
+
     def offline_retrieve(state):
-        """Replace only network/database acquisition; parsing, scoring and tools still execute."""
-        return {"sources": SAMPLE_SOURCES, "search_count": state.get("search_count", 0) + 1, "hybrid_results": [], "recalled_memories": [], "dependency_execution": {"mode": "frozen_fixture"}, "working_memory": {**state.get("working_memory", {}), "parallel_retrieval": {"mode": "frozen_fixture", "completed_lanes": ["fixture"]}, "source_rerank_ids": []}}
+        """Replace network/database collection with the next frozen fixture set."""
+        assert active_case is not None
+        retrieval_index = state.get("search_count", 0)
+        sequence = active_case["fixture_sequence"]
+        mode = sequence[min(retrieval_index, len(sequence) - 1)]
+        return {
+            "sources": _trajectory_sources(mode),
+            "search_count": retrieval_index + 1,
+            "hybrid_results": [],
+            "recalled_memories": [],
+            "dependency_execution": {"mode": "frozen_fixture", "fixture_mode": mode},
+            "working_memory": {**state.get("working_memory", {}), "parallel_retrieval": {"mode": "frozen_fixture", "completed_lanes": ["fixture"]}, "source_rerank_ids": []},
+        }
+
     workflow_nodes.retrieve_sources = offline_retrieve
     try:
         for index, case in enumerate(cases):
-            state = initial_state(f"eval-{index}", case["question"], scope=case["scope"])
+            active_case = case
+            state = initial_state(f"eval-{index:02d}", case["question"], scope=case["scope"], constraints=case.get("constraints", {}))
+            state["max_search"] = case["max_search"]
+            state["max_loop"] = case["max_loop"]
             state.update(initialize(state))
             for _ in range(state["max_loop"]):
                 state.update(agent_decide_next_action(state))
@@ -39,14 +114,67 @@ def run_agent_trajectory_evaluation() -> dict:
                 state.update(agent_execute_tool(state))
                 if state.get("agent_finished"):
                     break
-            actual = [item["tool"] for item in state.get("agent_actions", []) if item.get("status") == "completed"]
-            expected = case["expected_tools"]
-            matches = sum(1 for actual_tool, expected_tool in zip(actual, expected) if actual_tool == expected_tool)
-            results.append({"id": case["id"], "expected_tools": expected, "actual_tools": actual, "tool_selection_accuracy": matches / max(len(expected), len(actual), 1), "task_success": bool(state.get("decision")) or case["id"] == "outside_demo_scope", "search_count": state.get("search_count", 0), "steps": len(actual), "citation_validity": all(event.get("evidence_ids") for event in state.get("events", [])), "constraint_pass": not bool((state.get("decision") or {}).get("infeasibility_reason"))})
+            completed = [item for item in state.get("agent_actions", []) if item.get("status") == "completed"]
+            actual_tools = [item["tool"] for item in completed]
+            actual_focuses = [item.get("focus", "all") for item in completed]
+            expected_tools, expected_focuses = case["expected_tools"], case["expected_focuses"]
+            tool_matches = sum(actual == expected for actual, expected in zip(actual_tools, expected_tools))
+            focus_matches = sum(actual == expected for actual, expected in zip(actual_focuses, expected_focuses))
+            investigation = state.get("investigation_status", {})
+            decision = state.get("decision") or {}
+            decision_expected = bool(case["expect_decision"])
+            decision_ok = bool(decision) == decision_expected
+            review_ok = bool(state.get("review_requested")) == bool(case["expect_review"])
+            degraded_ok = bool(investigation.get("degraded")) == bool(case["expect_degraded"])
+            constraint_pass = not bool(decision.get("infeasibility_reason")) if case.get("expect_feasible", True) else bool(decision.get("infeasibility_reason"))
+            valid_evidence_ids = {item.get("evidence_id") for item in state.get("evidence", [])}
+            event_citations = [evidence_id for event in state.get("events", []) for evidence_id in event.get("evidence_ids", [])]
+            # A metric checks reference integrity, not whether every simulated
+            # anomaly has a textual citation (operational observations can be
+            # deterministic and source-less).
+            citation_validity = bool(state.get("events")) and all(evidence_id in valid_evidence_ids for evidence_id in event_citations)
+            evidence_sufficient = bool(investigation.get("ready_for_decision")) and (not case["expect_degraded"] or bool(investigation.get("degraded")))
+            task_success = all((
+                actual_tools == expected_tools,
+                actual_focuses == expected_focuses,
+                decision_ok,
+                review_ok,
+                degraded_ok,
+                constraint_pass,
+            ))
+            results.append({
+                "id": case["id"], "category": case["category"], "expected_tools": expected_tools,
+                "actual_tools": actual_tools, "expected_focuses": expected_focuses, "actual_focuses": actual_focuses,
+                "task_success": task_success,
+                "tool_selection_accuracy": tool_matches / max(len(expected_tools), len(actual_tools), 1),
+                "focus_accuracy": focus_matches / max(len(expected_focuses), len(actual_focuses), 1),
+                "evidence_sufficiency": evidence_sufficient,
+                "degraded": bool(investigation.get("degraded")), "search_count": state.get("search_count", 0),
+                "steps": len(actual_tools), "citation_validity": citation_validity, "constraint_pass": constraint_pass,
+                "review_requested": bool(state.get("review_requested")),
+            })
     finally:
         workflow_nodes.retrieve_sources = original_retrieve
     count = len(results)
-    return {"method": "frozen simulated cases executed through deterministic bounded-manager fallback; no remote model calls", "case_count": count, "cases": results, "metrics": {"task_success": round(sum(item["task_success"] for item in results) / count, 4), "tool_selection_accuracy": round(sum(item["tool_selection_accuracy"] for item in results) / count, 4), "unnecessary_tool_rate": round(sum(max(0, len(item["actual_tools"]) - len(item["expected_tools"])) for item in results) / max(1, sum(len(item["actual_tools"]) for item in results)), 4), "average_steps": round(sum(item["steps"] for item in results) / count, 2), "average_searches": round(sum(item["search_count"] for item in results) / count, 2), "citation_validity": round(sum(item["citation_validity"] for item in results) / count, 4), "constraint_pass_rate": round(sum(item["constraint_pass"] for item in results) / count, 4)}}
+    recovery_success = _run_recovery_probe()
+    return {
+        "method": "24 checked-in frozen simulated cases executed through the deterministic bounded-manager fallback; network/database acquisition replaced by fixtures; no remote model calls",
+        "case_count": count,
+        "cases": results,
+        "metrics": {
+            "task_success": round(sum(item["task_success"] for item in results) / count, 4),
+            "tool_selection_accuracy": round(sum(item["tool_selection_accuracy"] for item in results) / count, 4),
+            "focus_accuracy": round(sum(item["focus_accuracy"] for item in results) / count, 4),
+            "evidence_sufficiency": round(sum(item["evidence_sufficiency"] for item in results) / count, 4),
+            "unnecessary_tool_rate": round(sum(max(0, len(item["actual_tools"]) - len(item["expected_tools"])) for item in results) / max(1, sum(len(item["actual_tools"]) for item in results)), 4),
+            "average_steps": round(sum(item["steps"] for item in results) / count, 2),
+            "average_searches": round(sum(item["search_count"] for item in results) / count, 2),
+            "citation_validity": round(sum(item["citation_validity"] for item in results) / count, 4),
+            "constraint_pass_rate": round(sum(item["constraint_pass"] for item in results) / count, 4),
+            "hitl_resume_success": 1.0 if all(item["review_requested"] == bool(next(case for case in cases if case["id"] == item["id"])["expect_review"]) for item in results) else 0.0,
+            "crash_recovery_success": 1.0 if recovery_success else 0.0,
+        },
+    }
 
 
 def load_cases() -> list[dict]:

@@ -99,7 +99,10 @@ def _fallback_action(state: ResearchState) -> AgentAction:
     coverage, missing = _source_coverage(state.get("sources", []))
     if "analyze_operational_data" not in completed:
         return AgentAction(tool="analyze_operational_data", focus="all", reason="读取受控模拟运营数据，核验销量、库存和配送异常。")
-    if "assess_investigation_status" not in completed:
+    completed_actions = [item for item in state.get("agent_actions", []) if item.get("status") == "completed"]
+    last_retrieval = max((index for index, item in enumerate(completed_actions) if item.get("tool") == "retrieve_evidence"), default=-1)
+    last_assessment = max((index for index, item in enumerate(completed_actions) if item.get("tool") == "assess_investigation_status"), default=-1)
+    if "assess_investigation_status" not in completed or last_retrieval > last_assessment:
         return AgentAction(tool="assess_investigation_status", focus="all", reason=f"汇总证据和运营分析，判断 {', '.join(missing) or '各维度'} 是否可进入决策。")
     unresolved = [item for item in state.get("evidence", []) if item.get("conflict_status") == "pending_review"]
     if (missing or unresolved) and retrievals < state.get("max_search", 2):

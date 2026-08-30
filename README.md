@@ -6,18 +6,20 @@ StoreFlow 服务于连锁零售企业的区域采购负责人。当促销、天�
 
 ## 为什么不是普通 RAG
 
-StoreFlow 是单 Manager 的受限 ReAct Agent：LangGraph 控制“选择下一步 → 调用白名单复合工具 → Observation → 再规划”的循环。Manager 可选择取证、确定性运营分析、调查状态评估、决策分析、提交审核或结束；第二次取证会围绕库存、需求、配送或成本中的未解决假设定向补证。Agent 最多 6 步、最多 2 次检索；模型只返回结构化工具动作，不保存自由式思维链。关键订货量由固定种子 Monte Carlo 与 OR-Tools 计算，决策草案会自动进入人工审核。
+StoreFlow 是单 Manager 的受限 ReAct Agent：LangGraph 控制“选择下一步 → 调用白名单复合工具 → Observation → 再规划”的循环。Manager 根据 Observation 动态选择取证、确定性运营分析、调查状态评估、决策分析、提交审核或结束；第二次取证会围绕库存、需求、配送或成本中的未解决假设定向补证。动作契约为 `{tool, focus, reason}`，默认最多 6 步、最多 2 次检索、最多 4 次模型选择；模型不保存自由式思维链。关键订货量由固定种子 Monte Carlo 与 OR-Tools 计算，决策草案会自动进入人工审核。
 
 ```mermaid
 flowchart LR
-  A[门店资料 / 采购问题] --> B[受限 Agent]
-  B --> C[并行证据采集]
-  C --> D[RRF + 精排 + 上下文压缩]
-  D --> E[运营数据分析 + 调查假设]
-  E --> F[RiskEvent]
-  F --> G[Monte Carlo + OR-Tools 三策略]
+  A[调查问题] --> B[Manager 读取 Observation]
+  B --> C{动态选择动作}
+  C -->|取证 / 定向补证| D[RRF + 精排 + 当前证据]
+  C -->|运营分析| E[确定性运营指标]
+  D --> F[调查状态：假设 / 冲突 / 预算]
+  E --> F
+  F --> B
+  C -->|通过决策守卫| G[Monte Carlo + OR-Tools 三策略]
   G --> H{采购负责人审核}
-  H -->|批准| I[建议草案 + 经审核长期记忆]
+  H -->|批准| I[建议草案 + 经审核记忆]
   H -->|补证/改约束| B
 ```
 

@@ -2,7 +2,7 @@
 
 ## 一句话
 
-StoreFlow 是面向连锁零售区域采购负责人的补货风险决策 Agent：在需求与到货不确定性下，用受控证据和可复现仿真生成可审核的订货建议。
+StoreFlow 是面向连锁零售区域采购负责人的供应链异常调查与补货决策 Agent：先调查和核验证据，再用可复现仿真生成可审核的订货建议。
 
 ## 输入、输出与边界
 
@@ -16,7 +16,7 @@ StoreFlow 是面向连锁零售区域采购负责人的补货风险决策 Agent�
 
 ## 系统结构
 
-1. LangGraph 受限 Agent 在最多 6 步内选择只读工具，并对证据缺口再规划。
+1. LangGraph 单 Manager 受限 Agent 以 `{tool, focus, reason}` 在最多 6 步内动态选择取证、运营分析、调查评估、定向补证、决策与人审；决策只能在调查状态 ready/degraded 后运行。
 2. 内部资料、近期公开风险与已批准记忆并行采集；RRF 融合、重排序、Evidence-ID 绑定压缩随后执行。
 3. 风险事件输入固定种子 Monte Carlo 与 OR-Tools，比较正常订货、适度加订、高保障加订。
 4. LangGraph interrupt + MySQL checkpoint 暂停等待审核；审核通过后才可沉淀长期记忆。

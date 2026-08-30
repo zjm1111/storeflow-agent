@@ -15,7 +15,7 @@ StoreFlow 是面向连锁零售企业区域采购负责人的供应链异常调�
 
 ## Agent 行为边界
 
-每一轮由百炼模型输出严格校验的 `{tool, reason}` JSON，控制器只接受内部资料检索、近期风险检索、已批准记忆检索、证据缺口检查、证据包、仿真和人审请求等白名单动作。代码负责执行权限、最多 6 步、最多 2 次外部检索、超时和 JSON 异常降级；模型不能下单、写库存、调用任意 URL 或执行命令。未配置模型时，系统会明确记录确定性回退，而不会伪装成自由自治。
+每一轮由模型输出严格校验的 `{tool, focus, reason}` JSON；`focus` 只可为 `all / inventory / demand / delivery / cost`。控制器只接受 `retrieve_evidence`、`analyze_operational_data`、`assess_investigation_status`、`run_decision_analysis`、`request_human_review` 与 `finish`；代码负责权限、最多 6 步、最多 2 次检索、最多 4 次模型选择、决策前调查守卫及 JSON 异常降级。模型不能下单、写库存、调用任意 URL 或执行命令。未配置模型时，系统会明确记录确定性回退，而不会伪装成自由自治。
 
 RRF 检索漏斗同时展示内部资料、公开/Tavily 风险、向量/BM25 混合候选和已批准记忆。长期记忆仅作为受审核的业务先验，不能替代带 Evidence ID 的当前事实。
 
